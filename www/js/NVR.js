@@ -193,7 +193,8 @@ angular.module('zmApp.controllers')
         'objectDetectionFilter': false,
         'enableEventRefresh': true,
         'lastEventCheckTimes':{}, 
-        'enableMontageOverlays': true
+        'enableMontageOverlays': true,
+        'showMontageSidebars': false
       
 
 
@@ -507,8 +508,13 @@ angular.module('zmApp.controllers')
         if (loginData.packeryPositions != '' && loginData.packeryPositions != undefined) {
           // console.log("positions=" + loginData.packeryPositions);
 
-
-          positions = JSON.parse(positionsStr);
+          try {
+            positions = JSON.parse(positionsStr);
+          }
+          catch (e) {
+              debug ("error parsing positions");
+          }
+          
           for (var m = 0; m < monitors.length; m++) {
             var positionFound = false;
             for (var p = 0; p < positions.length; p++) {
@@ -1048,6 +1054,11 @@ angular.module('zmApp.controllers')
 
                 if (typeof loginData.enableMontageOverlays == 'undefined') {
                     loginData.enableMontageOverlays = true;
+
+                  }
+
+                  if (typeof loginData.showMontageSidebars == 'undefined') {
+                    loginData.showMontageSidebars = false;
 
                   }
 

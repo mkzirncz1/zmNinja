@@ -58,10 +58,16 @@
             </a>
           </li>
 
+          <li>
+            <a  ng-click="clearAllEvents()">
+              <i class="ion-checkmark"></i>
+            </a>
+          </li>
+
           <li ng-style="{'background-color': isCycleOn()?'rgba(69, 170, 242,0.7)':'rgba(108, 122, 137, 0.7)'}"
             ng-if="!isDragabillyOn">
             <a ng-click="toggleCycle()">
-              <i class="ion-android-bicycle"></i>:{{getCycleStatus()}}</a>
+              <i class="ion-android-bicycle"></i></a>
           </li>
 
           <li ng-if="isDragabillyOn">
@@ -75,11 +81,6 @@
             </a>
           </li>
 
-        </ul>
-      </div>
-
-      <div id="flyoutmenu" style="float:right">
-        <ul>
           <li>
             <a href="" ng-click="switchMontageProfile()">
               <i class="ion-navicon-round"></i>
@@ -98,9 +99,10 @@
             </a>
           </li>
 
-
         </ul>
       </div>
+
+   
       <div style="clear: both;"></div>
 
       <br />
@@ -152,9 +154,7 @@
                   <span ng-if="monitor.Monitor.isStamp && isDragabillyOn">
                     <i class="animated infinite flash ion-pin"></i>&nbsp;</span>
                   <i class="ion-ios-videocam"></i>&nbsp; {{monitor.Monitor.Name}}&nbsp;
-                  <i ng-if="$root.runMode!='lowbw'" ng-style="{'color':monitor.Monitor.alarmState}"
-                    class="ion-record"></i>&nbsp;
-
+                
                 </figcaption>
 
               </figure>
@@ -179,7 +179,13 @@
               {{formatBytes(monitor.Monitor.TotalEventDiskSpace,1)}}
             </div>
             <div ng-if="!monitor.Monitor.lastEvent">
-              <div class="row">{{'kMontageEventCaughtUp' | translate}}</div>
+              <div class="row row-no-padding">
+                  <div class="col col-no-padding">
+                        <a class="button button-small button icon ion-thumbsup" 
+                        ng-click="eventButtonClicked(monitor, true)"> {{'kMontageEventCaughtUp' | translate}} </a>
+                  </div>
+                 
+            </div>  
             </div>
             <div ng-if="monitor.Monitor.lastEvent">
               <div class="row row-no-padding">
