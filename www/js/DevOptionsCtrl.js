@@ -2,7 +2,7 @@
 /* jslint browser: true*/
 /* global cordova,StatusBar,angular,console */
 
-angular.module('zmApp.controllers').controller('zmApp.DevOptionsCtrl', ['$scope', '$rootScope', '$ionicModal', 'zm', 'NVR', '$ionicSideMenuDelegate', '$ionicPopup', '$http', '$q', '$ionicLoading', '$ionicHistory', '$state', 'SecuredPopups', '$translate', function ($scope, $rootScope, $ionicModal, zm, NVR, $ionicSideMenuDelegate, $ionicPopup, $http, $q, $ionicLoading, $ionicHistory, $state, SecuredPopups, $translate) {
+angular.module('zmApp.controllers').controller('zmApp.DevOptionsCtrl', ['$scope', '$rootScope', '$ionicModal', 'zm', 'NVR', '$ionicSideMenuDelegate', '$ionicPopup', '$http', '$q', '$ionicLoading', '$ionicHistory', '$state', 'SecuredPopups', '$translate','$ionicActionSheet', function ($scope, $rootScope, $ionicModal, zm, NVR, $ionicSideMenuDelegate, $ionicPopup, $http, $q, $ionicLoading, $ionicHistory, $state, SecuredPopups, $translate, $ionicActionSheet) {
 
   $scope.openMenu = function () {
     $ionicSideMenuDelegate.toggleLeft();
@@ -63,7 +63,7 @@ angular.module('zmApp.controllers').controller('zmApp.DevOptionsCtrl', ['$scope'
 
     //console.log("**VIEW ** DevOptions Ctrl Entered");
     $scope.loginData = NVR.getLogin();
-    console.log("DEV LOGS=" + $scope.loginData.enableLogs);
+    //console.log("DEV LOGS=" + $scope.loginData.enableLogs);
 
     $scope.isMultiPort = false;
 
@@ -96,6 +96,12 @@ angular.module('zmApp.controllers').controller('zmApp.DevOptionsCtrl', ['$scope'
   function saveDevOptions() {
     NVR.debug("SaveDevOptions: called");
 
+    //console.log (JSON.stringify($scope.loginData));
+    if (typeof $scope.loginData.zmNinjaCustomId !== 'undefined') {
+      $scope.loginData.zmNinjaCustomId = $scope.loginData.zmNinjaCustomId.replace(/\s+/g, '_');
+
+    }
+    
     if (parseInt($scope.loginData.cycleMonitorsInterval) < zm.minCycleTime) {
       $scope.loginData.cycleMonitorsInterval = zm.minCycleTime.toString();
     }
@@ -140,6 +146,40 @@ angular.module('zmApp.controllers').controller('zmApp.DevOptionsCtrl', ['$scope'
     NVR.getMonitors(1);
 
   }
+
+  $scope.useDefaultCustom = function() {
+    if ($scope.loginData.zmNinjaCustomId=='') {
+      $scope.loginData.zmNinjaCustomId = 'zmNinja_'+NVR.getAppVersion();
+    }
+   
+
+  };
+
+  $scope.selectObfuscationScheme = function() {
+
+    var buttons = [
+      { text: $translate.instant('kObfuscationLZS'), value:'lzs' },
+      { text: $translate.instant('kObfuscationAES'), value:'aes' },
+     
+    ];
+
+    $ionicActionSheet.show({
+      titleText: $translate.instant('kSelect'),
+      buttons: buttons,
+    
+      cancelText: $translate.instant('kButtonCancel'),
+      cancel: function() {
+       NVR.debug ('obfuscation actionsheet cancelled');
+      },
+      buttonClicked: function(index) {
+       
+        $scope.loginData.obfuscationScheme = buttons[index].value;
+        NVR.debug ('changed obfuscation scheme to:'+$scope.loginData.obfuscationScheme );
+        return true;
+      },
+     
+    });
+  };
 
   $scope.saveDevOptions = function () {
 

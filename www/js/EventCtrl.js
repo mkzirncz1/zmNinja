@@ -317,7 +317,7 @@ angular.module('zmApp.controllers')
 
     function getEventObject(eid) {
 
-      var apiurl = NVR.getLogin().apiurl + '/events/' + eid + '.json';
+      var apiurl = NVR.getLogin().apiurl + '/events/' + eid + '.json?'+$rootScope.authSession;
 
       $http.get(apiurl)
         .then(function (data) {},
@@ -450,13 +450,13 @@ angular.module('zmApp.controllers')
       if ($rootScope.toString)
         nolangTo = moment($rootScope.toString).locale('en').format("YYYY-MM-DD HH:mm:ss");
 
-      NVR.getEvents($scope.id, currEventsPage, "", nolangFrom, nolangTo)
+      NVR.getEvents($scope.id, currEventsPage, "", nolangFrom, nolangTo, false, $rootScope.monitorsFilter)
         .then(function (data) {
 
           pageLoaded = true;
           //$scope.viewTitle.title = data.pagination.count;
 
-          console.log(JSON.stringify(data.pagination));
+         // console.log(JSON.stringify(data.pagination));
           if (data.pagination && data.pagination.pageCount)
             maxEventsPage = data.pagination.pageCount;
 
@@ -509,6 +509,8 @@ angular.module('zmApp.controllers')
 
               var mw = parseInt(tempMon.Monitor.Width);
               var mh = parseInt(tempMon.Monitor.Height);
+
+             
               var mo = parseInt(tempMon.Monitor.Orientation);
               myevents[i].Event.Rotation = '';
 
@@ -919,7 +921,7 @@ angular.module('zmApp.controllers')
 
         function onError(error) {
           $ionicLoading.hide();
-          console.log("Error: " + error);
+          NVR.debug("Error: " + error);
 
         }
       }
@@ -967,21 +969,19 @@ angular.module('zmApp.controllers')
       }
 
      
-        $scope.imgsrc = p + "/index.php?view=image&fid=" + $scope.parray[$scope.ndx].id + $scope.outlineMotionParam;
-        $scope.fallbackImgSrc = p + "/index.php?view=image&fid=" + $scope.parray[$scope.ndx].id;
+        $scope.imgsrc = p + "/index.php?view=image&fid=" + $scope.parray[$scope.ndx].id + $scope.outlineMotionParam+$rootScope.authSession;
+        $scope.fallbackImgSrc = p + "/index.php?view=image&fid=" + $scope.parray[$scope.ndx].id+$rootScope.authSession;
 
    
 
       //$rootScope.zmPopup = $ionicPopup.alert({title: kFrame+':'+fid+'/'+kEvent+':'+e,template:img,  cssClass:'popup80'});
 
-      if ($rootScope.authSession != 'undefined') {
-        $scope.imgsrc += $rootScope.authSession;
-        $scope.fallbackImgSrc += $rootScope.authSession;
-      }
+   
+  
 
 
-      $scope.imgsrc += NVR.insertBasicAuthToken();
-      $scope.fallbackImgSrc += NVR.insertBasicAuthToken();
+      $scope.imgsrc += NVR.insertSpecialTokens();
+      $scope.fallbackImgSrc += NVR.insertSpecialTokens();
 
 
 
@@ -1024,8 +1024,8 @@ angular.module('zmApp.controllers')
               $scope.ndx = nndx;
 
              
-                $scope.imgsrc = p + "/index.php?view=image&fid=" + $scope.parray[$scope.ndx].id + $scope.outlineMotionParam;
-                $scope.fallbackImgSrc = p + "/index.php?view=image&fid=" + $scope.parray[$scope.ndx].id;
+                $scope.imgsrc = p + "/index.php?view=image&fid=" + $scope.parray[$scope.ndx].id + $scope.outlineMotionParam+$rootScope.authSession;
+                $scope.fallbackImgSrc = p + "/index.php?view=image&fid=" + $scope.parray[$scope.ndx].id+$rootScope.authSession;
 
          
 
@@ -1057,8 +1057,8 @@ angular.module('zmApp.controllers')
               $scope.ndx = nndx;
 
              
-                $scope.imgsrc = p + "/index.php?view=image&fid=" + $scope.parray[$scope.ndx].id + $scope.outlineMotionParam;
-                $scope.fallbackImgSrc = p + "/index.php?view=image&fid=" + $scope.parray[$scope.ndx].id;
+                $scope.imgsrc = p + "/index.php?view=image&fid=" + $scope.parray[$scope.ndx].id + $scope.outlineMotionParam+$rootScope.authSession;
+                $scope.fallbackImgSrc = p + "/index.php?view=image&fid=" + $scope.parray[$scope.ndx].id+$rootScope.authSession;
 
               
 
@@ -1222,7 +1222,7 @@ angular.module('zmApp.controllers')
     function prepareImages(e) {
       var d = $q.defer();
       var imglist = [];
-      var myurl = loginData.apiurl + '/events/' + e.Event.Id + ".json";
+      var myurl = loginData.apiurl + '/events/' + e.Event.Id + ".json?"+$rootScope.authSession;
       $http.get(myurl)
         .then(function (succ) {
             var data = succ.data;
@@ -1236,7 +1236,7 @@ angular.module('zmApp.controllers')
                 var fname;
                 //console.log ("PATH="+e.Event.imageMode);
                 
-                  fname = e.Event.recordingURL + "/index.php?view=image&width=" + zm.maxGifWidth + "&fid=" + data.event.Frame[i].Id;
+                  fname = e.Event.recordingURL + "/index.php?view=image&width=" + zm.maxGifWidth + "&fid=" + data.event.Frame[i].Id+$rootScope.authSession;
              
 
                 if (data.event.Frame[i].TimeStamp != lastTime /*|| fps < 2*/ )
@@ -1656,7 +1656,7 @@ angular.module('zmApp.controllers')
 
       NVR.debug("Archiving request for EID=" + eid);
       var loginData = NVR.getLogin();
-      var apiArchive = loginData.apiurl + "/events/" + eid + ".json";
+      var apiArchive = loginData.apiurl + "/events/" + eid + ".json?"+$rootScope.authSession;
       var setArchiveBit = ($scope.events[ndx].Event.Archived == '0') ? "1" : "0";
 
       NVR.debug("Calling archive with:" + apiArchive + " and Archive=" + setArchiveBit);
@@ -1743,7 +1743,7 @@ angular.module('zmApp.controllers')
       //$scope.eventList.showDelete = false;
       //curl -XDELETE http://server/zm/api/events/1.json
       var loginData = NVR.getLogin();
-      var apiDelete = loginData.apiurl + "/events/" + id + ".json";
+      var apiDelete = loginData.apiurl + "/events/" + id + ".json?"+$rootScope.authSession;
       NVR.debug("DeleteEvent: ID=" + id + " item=" + itemid);
       NVR.log("Delete event " + apiDelete);
 
@@ -1820,6 +1820,7 @@ angular.module('zmApp.controllers')
           $rootScope.toTime = "";
           $rootScope.fromString = "";
           $rootScope.toString = "";
+          $rootScope.monitorsFilter = '';
 
           $scope.id = 0;
           $scope.showEvent = false;
@@ -1877,18 +1878,18 @@ angular.module('zmApp.controllers')
       var af = "/AlarmFrames >=:" + (ld.enableAlarmCount ? ld.minAlarmCount : 0);
 
       if (ld.objectDetectionFilter) {
-        af = af + '/Notes REGEXP:"detected:"';
+        af = af + '/Notes REGEXP:detected:';
       }
 
      
 
-      var apiurl = ld.apiurl + "/events/consoleEvents/1 hour" + af + ".json";
+      var apiurl = ld.apiurl + "/events/consoleEvents/1 hour" + af + ".json?"+$rootScope.authSession;
       //NVR.debug("consoleEvents API:" + apiurl);
 
       $http.get(apiurl)
         .then(function (data) {
           data = data.data;
-         // NVR.debug(JSON.stringify(data));
+         // NVR.debug(JSON.stringify(data));  
           $scope.hours = [];
           var p = data.results;
           for (var key in data.results) {
@@ -1919,7 +1920,7 @@ angular.module('zmApp.controllers')
           }
         });
 
-      apiurl = ld.apiurl + "/events/consoleEvents/1 day" + af + ".json";
+      apiurl = ld.apiurl + "/events/consoleEvents/1 day" + af + ".json?"+$rootScope.authSession;
       //NVR.debug("consoleEvents API:" + apiurl);
       $http.get(apiurl)
         .then(function (data) {
@@ -1952,7 +1953,7 @@ angular.module('zmApp.controllers')
           }
         });
 
-      apiurl = ld.apiurl + "/events/consoleEvents/1 week" + af + ".json";
+      apiurl = ld.apiurl + "/events/consoleEvents/1 week" + af + ".json?"+$rootScope.authSession;
       //NVR.debug("consoleEvents API:" + apiurl);
       $http.get(apiurl)
         .then(function (data) {
@@ -1986,7 +1987,7 @@ angular.module('zmApp.controllers')
           }
         });
 
-      apiurl = ld.apiurl + "/events/consoleEvents/1 month" + af + ".json";
+      apiurl = ld.apiurl + "/events/consoleEvents/1 month" + af + ".json?"+$rootScope.authSession;
       //NVR.debug("consoleEvents API:" + apiurl);
       $http.get(apiurl)
         .then(function (data) {
@@ -2163,7 +2164,7 @@ angular.module('zmApp.controllers')
           $scope.alarm_images = [];
           event.Event.height = (eventsListDetailsHeight + eventsListScrubHeight);
           $ionicScrollDelegate.resize();
-          var myurl = loginData.apiurl + '/events/' + event.Event.Id + ".json";
+          var myurl = loginData.apiurl + '/events/' + event.Event.Id + ".json?"+$rootScope.authSession;
           NVR.log("API for event details" + myurl);
           $http.get(myurl)
             .then(function (data) {
@@ -2274,7 +2275,7 @@ angular.module('zmApp.controllers')
           var i;
 
           
-            var myurl_frames = loginData.apiurl + '/events/' + event.Event.Id + ".json";
+            var myurl_frames = loginData.apiurl + '/events/' + event.Event.Id + ".json?"+$rootScope.authSession;
             NVR.log("API for event details" + myurl_frames);
             $http.get(myurl_frames)
               .then(function (data) {
@@ -2316,11 +2317,11 @@ angular.module('zmApp.controllers')
 
         
           videoURL = event.Event.recordingURL + "/index.php?view=view_video&eid=" + event.Event.Id;
-          if ($rootScope.authSession != 'undefined') videoURL += $rootScope.authSession;
-          videoURL += NVR.insertBasicAuthToken();
+          videoURL += $rootScope.authSession;
+          videoURL += NVR.insertSpecialTokens();
 
 
-          console.log("************** VIDEO IS " + videoURL);
+         //  console.log("************** VIDEO IS " + videoURL);
           event.Event.video.config = {
             autoPlay: true,
             sources: [{
@@ -2334,7 +2335,7 @@ angular.module('zmApp.controllers')
 
           };
 
-          var myurl2 = loginData.apiurl + '/events/' + event.Event.Id + ".json";
+          var myurl2 = loginData.apiurl + '/events/' + event.Event.Id + ".json?"+$rootScope.authSession;
           NVR.log("API for event details" + myurl2);
           $http.get(myurl2)
             .then(function (data) {
@@ -2544,6 +2545,9 @@ angular.module('zmApp.controllers')
    
 
     $scope.modalGraph = function () {
+      $scope.lastVideoStateTime = {
+        'time':''
+      };
       $ionicModal.fromTemplateUrl('templates/events-modalgraph.html', {
           scope: $scope, // give ModalCtrl access to this scope
           animation: 'slide-in-up',
@@ -2559,6 +2563,9 @@ angular.module('zmApp.controllers')
     };
 
     $scope.analyzeEvent = function (ev) {
+      $scope.lastVideoStateTime = {
+        'time':''
+      };
       $scope.event = ev;
       $ionicModal.fromTemplateUrl('templates/timeline-modal.html', {
           scope: $scope, // give ModalCtrl access to this scope
@@ -2604,7 +2611,7 @@ angular.module('zmApp.controllers')
       }
 
 
-      $scope.thumbnailLarge = b + '/index.php?view=image&fid=' + f;
+      $scope.thumbnailLarge = b + '/index.php?view=image&fid=' + f+$rootScope.authSession;
       $ionicModal.fromTemplateUrl('templates/image-modal.html', {
           scope: $scope,
           animation: 'slide-in-up',
@@ -2664,7 +2671,9 @@ angular.module('zmApp.controllers')
       if (ld.showLiveForInProgressEvents) {
         sl = 'enabled';
       }
-
+      $scope.lastVideoStateTime = {
+        'time':''
+      };
       NVR.debug("Shall I follow the same monitor for prev/next?:"+$scope.followSameMonitor);
       $ionicModal.fromTemplateUrl('templates/events-modal.html', {
           scope: $scope,
@@ -2691,6 +2700,15 @@ angular.module('zmApp.controllers')
     //--------------------------------------------------------
     $scope.closeModal = function () {
       NVR.debug(">>>EventCtrl:Close & Destroy Modal");
+      if ($scope.lastVideoStateTime && $scope.lastVideoStateTime.time) {
+        var diff = moment().diff($scope.lastVideoStateTime.time);
+        if (diff <= 300) {
+          NVR.debug ("Not closing model, time interval was only:"+diff+" ms");
+          return;
+        }
+      }
+     
+      
       NVR.setAwake(false);
       if ($scope.modal !== undefined) {
         $scope.modal.remove();
@@ -2751,13 +2769,13 @@ angular.module('zmApp.controllers')
       // the events API does not return an error for anything
       // except greater page limits than reported
 
-      console.log("***** LOADING MORE INFINITE SCROLL ****");
+      //console.log("***** LOADING MORE INFINITE SCROLL ****");
 
       if ((currEventsPage >= maxEventsPage) && (pageLoaded)) {
         moreEvents = false;
         NVR.debug("No more - We have a total of " + maxEventsPage + " and are at page=" + currEventsPage);
 
-        console.log("*** At Page " + currEventsPage + " of " + maxEventsPage + ", not proceeding");
+       // console.log("*** At Page " + currEventsPage + " of " + maxEventsPage + ", not proceeding");
         $ionicLoading.hide();
         return;
       }
@@ -2776,7 +2794,7 @@ angular.module('zmApp.controllers')
       if ($scope.search.text != "") {
     
         var toastStr = $translate.instant('kPleaseWait') +'...'+ currEventsPage;
-        console.log ("SHOW " + toastStr );
+       // console.log ("SHOW " + toastStr );
         $ionicLoading.show({
           maxwidth: 100,
           noBackdrop:true,
@@ -2795,7 +2813,7 @@ angular.module('zmApp.controllers')
       if ($rootScope.toString)
         nolangTo = moment($rootScope.toString).locale('en').format("YYYY-MM-DD HH:mm:ss");
 
-      NVR.getEvents($scope.id, currEventsPage, loadingStr, nolangFrom, nolangTo)
+      NVR.getEvents($scope.id, currEventsPage, loadingStr, nolangFrom, nolangTo, false,$rootScope.monitorsFilter)
         .then(function (data) {
             var loginData = NVR.getLogin();
             // console.log("Got new page of events with Page=" + eventsPage);
@@ -2838,8 +2856,6 @@ angular.module('zmApp.controllers')
 
               var tempMon = NVR.getMonitorObject(myevents[i].Event.MonitorId);
               if (tempMon != undefined) {
-
-
                 var mw = parseInt(tempMon.Monitor.Width);
                 var mh = parseInt(tempMon.Monitor.Height);
                 var mo = parseInt(tempMon.Monitor.Orientation);
@@ -2910,6 +2926,8 @@ angular.module('zmApp.controllers')
     function computeThumbnailSize(mw, mh, mo) {
 
 
+      
+     
       tw = Math.min(Math.round(0.35 * $rootScope.devWidth), 200);
       th = 150;
 
@@ -2919,7 +2937,7 @@ angular.module('zmApp.controllers')
         h: 0
       };
 
-      
+    
     /* seems I really should be using strings due to horz and very
     but luckily parseInt will make them 0 which gets treated as "nothing to do"
     '0' => translate('Normal'),
@@ -2958,6 +2976,7 @@ angular.module('zmApp.controllers')
 
     }
 
+   
     $scope.constructThumbnail = function (event) {
       var stream = "";
       stream = event.Event.recordingURL +
@@ -2965,9 +2984,9 @@ angular.module('zmApp.controllers')
         NVR.getSnapshotFrame()+"&eid="+event.Event.Id  +
         "&width=" + event.Event.thumbWidth * 2 +
         "&height=" + event.Event.thumbHeight * 2;
-      if ($rootScope.authSession != 'undefined') stream += $rootScope.authSession;
+      stream += $rootScope.authSession;
 
-      stream += NVR.insertBasicAuthToken();
+      stream += NVR.insertSpecialTokens();
       return stream;
 
     };
@@ -2979,9 +2998,9 @@ angular.module('zmApp.controllers')
         stream = event.Event.recordingURL + "/index.php?view=image" +
           "&fid=" + slide.id + $scope.outlineMotionParam;
       
-      if ($rootScope.authSession != 'undefined') stream += $rootScope.authSession;
+     stream += $rootScope.authSession;
 
-      stream += NVR.insertBasicAuthToken();
+      stream += NVR.insertSpecialTokens();
 
 
       return stream;
@@ -2994,8 +3013,8 @@ angular.module('zmApp.controllers')
         stream = event.Event.recordingURL +
           "/index.php?view=image&fid=" + alarm.id;
         if (motion) stream += $scope.outlineMotionParam;
-      if ($rootScope.authSession != 'undefined') stream += $rootScope.authSession;
-      stream += NVR.insertBasicAuthToken();
+      stream += $rootScope.authSession;
+      stream += NVR.insertSpecialTokens();
 
 //      console.log ("alarm:"+stream);
       return stream;
@@ -3017,7 +3036,7 @@ angular.module('zmApp.controllers')
 
       var ld = NVR.getLogin();
 
-      console.log("Toggling " + ld.enableAlarmCount);
+     // console.log("Toggling " + ld.enableAlarmCount);
       ld.enableAlarmCount = !ld.enableAlarmCount;
       NVR.setLogin(ld);
       $scope.loginData = NVR.getLogin();

@@ -235,7 +235,19 @@ angular.module('zmApp.controllers').controller('zmApp.LoginCtrl', ['$scope', '$r
   //------------------------------------------------------------------------
   $scope.$on('$ionicView.beforeEnter', function () {
 
-
+    var ld = NVR.getLogin();
+    if (ld.isKiosk) {
+      NVR.log ("You are in kiosk mode, cannot show login screen");
+      $ionicHistory.nextViewOptions({
+        disableAnimate:true,
+        disableBack: true
+      });
+      $rootScope.importantMessageHeader = $translate.instant('kKioskErrorHeader');
+      $rootScope.importantMessageSummary = $translate.instant('kKioskErrorMessage');
+      $state.go('app.importantmessage');
+      return;
+    }
+    
     $scope.$on ( "process-push", function () {
       NVR.debug (">> LoginCtrl: push handler. Not processing push, because you might be here due to login failure");
       /*var s = NVR.evaluateTappedNotification();
@@ -256,7 +268,7 @@ angular.module('zmApp.controllers').controller('zmApp.LoginCtrl', ['$scope', '$r
     //console.log("**VIEW ** LoginCtrl  Entered");
     NVR.setAwake(false);
     //$scope.basicAuthUsed = false;
-    var ld = NVR.getLogin();
+    
     oldName = ld.serverName;
 
     availableServers = Object.keys(NVR.getServerGroups());
@@ -387,6 +399,59 @@ angular.module('zmApp.controllers').controller('zmApp.LoginCtrl', ['$scope', '$r
       }
   };
 
+
+  $scope.kioskPinConfig = function () {
+
+    var ld = NVR.getLogin();
+    $scope.data = {p1:ld.kioskPassword};     
+    // An elaborate, custom popup
+    var myPopup = $ionicPopup.show({
+      template: '<small>'+$translate.instant('kKioskPassword')+'</small><input type="password" ng-model="data.p1"><br/><small>'+$translate.instant('kKioskPasswordConfirm')+'</small><input type="password"  ng-model="data.p2">',
+      title: $translate.instant('kPassword'),
+      scope: $scope,
+      buttons: [
+        { text: $translate.instant('kButtonCancel'),
+            type: 'button-assertive',
+            onTap: function (e) {
+                $scope.loginData.isKiosk = false;
+            }
+        },
+        {
+          text: '<b>'+$translate.instant('kButtonSave')+'</b>',
+          type: 'button-positive',
+          onTap: function(e) {
+            if (!$scope.data.p1) {
+              //don't allow the user to close unless he enters wifi password
+              e.preventDefault();
+            } else {
+              if ($scope.data.p1 == $scope.data.p2) {
+                NVR.log ("Kiosk code match");
+                $scope.loginData.kioskPassword = $scope.data.p1;
+                $scope.loginData.isKiosk = true;
+                NVR.setLogin($scope.loginData);
+                $ionicHistory.nextViewOptions({
+                  disableBack: true
+                });
+                $state.go('app.montage');
+                return;
+              }
+              else {
+                    $ionicLoading.show({
+                        template: $translate.instant('kBannerPinMismatch') + "...",
+                        noBackdrop: true,
+                        duration: 1500
+                    });
+                  NVR.log ("Kiosk code mistmatch");
+                  $scope.loginData.isKiosk = false;
+                  e.preventDefault();
+              }
+              
+            }
+          }
+        }
+      ]
+    });
+  };
 
   function desktopPinConfig() {
 
@@ -529,6 +594,18 @@ function mobilePinConfig () {
 
   function saveItems(showalert) {
 
+    NVR.flushAPICache()
+    .then (function() {
+      _saveItems(showalert);
+    })
+    .catch (function(err) {
+      NVR.debug ('Error clearing cache:'+JSON.stringify(err));
+      _saveItems(showalert);
+    });
+
+  }
+  function _saveItems(showalert) {
+
     //console.log ("*********** SAVE ITEMS CALLED ");
     //console.log('Saving login');
 
@@ -610,9 +687,8 @@ function mobilePinConfig () {
          // don't do it for WSS - lets mandate that
      }*/
 
-    var apiurl = $scope.loginData.apiurl + '/host/getVersion.json';
-    var portalurl = $scope.loginData.url + '/index.php';
-
+    var apiurl = $scope.loginData.apiurl + '/host/getVersion.json?'+$rootScope.authSession;
+  
     // Check if isUseAuth is set make sure u/p have a dummy value
     if ($scope.loginData.isUseAuth) {
       if (!$scope.loginData.username) $scope.loginData.username = "x";
@@ -654,6 +730,7 @@ function mobilePinConfig () {
 
 
     $rootScope.authSession = '';
+    //console.log ("***** CLEARING AUTHSESSION IN SAVEITEMS");
 
     if ($rootScope.platformOS != 'desktop') {
 
@@ -669,7 +746,7 @@ function mobilePinConfig () {
         cordova.plugin.http.setSSLCertMode('nocheck', function () {
           NVR.debug('--> SSL is permissive, will allow any certs. Use at your own risk.');
         }, function () {
-          console.log('-->Error setting SSL permissive');
+          NVR.log('-->Error setting SSL permissive');
         });
 
         if ($rootScope.platformOS == 'android') {
@@ -689,8 +766,7 @@ function mobilePinConfig () {
         var serverGroupList = NVR.getServerGroups();
         serverGroupList[$scope.loginData.serverName] = angular.copy($scope.loginData);
 
-        var ct = CryptoJS.AES.encrypt(JSON.stringify(serverGroupList), zm.cipherKey).toString();
-
+        var ct = NVR.encrypt(serverGroupList);
         window.cordova.plugin.cloudsettings.save({
             'serverGroupList': ct,
             'defaultServerName': $scope.loginData.serverName
@@ -752,6 +828,7 @@ function mobilePinConfig () {
 
     }
 
+    
     zmAutoLogin.doLogin("<button class='button button-clear' style='line-height: normal; min-height: 0; min-width: 0;  color:#fff;' ng-click='$root.cancelAuth()'><i class='ion-close-circled'></i>&nbsp;" + $translate.instant('kAuthenticating') + "...</button>")
       // Do the happy menu only if authentication works
       // if it does not work, there is an emitter for auth
@@ -769,13 +846,15 @@ function mobilePinConfig () {
         if ($scope.loginData.serverName != NVR.getLogin().serverName) {
           NVR.debug(">>> Server information has changed, likely a fallback took over!");
           $scope.loginData = NVR.getLogin();
-          apiurl = $scope.loginData.apiurl + '/host/getVersion.json';
+          
           portalurl = $scope.loginData.url + '/index.php';
         }
 
         // possible image digits changed between servers
         NVR.getKeyConfigParams(0);
-
+        console.log ('In loginCtrl, token is '+$rootScope.authSession);
+        apiurl = $scope.loginData.apiurl + '/host/getVersion.json?'+$rootScope.authSession;
+        
         NVR.log("Validating APIs at " + apiurl);
         $http.get(apiurl)
           .then(function (data) {
@@ -785,88 +864,40 @@ function mobilePinConfig () {
               var loginStatus = $translate.instant('kExploreEnjoy') + " " + $rootScope.appName + "!";
               EventServer.refresh();
 
-              // now grab and report PATH_ZMS
-              NVR.getPathZms()
+              NVR.debug("refreshing API version...");
+              NVR.getAPIversion()
                 .then(function (data) {
-                  var ld = NVR.getLogin();
-                  var zm_cgi = data.toLowerCase();
+                    var refresh = NVR.getMonitors(1);
+                    $rootScope.apiVersion = data;
+                   // console.log ("ALERT="+showalert);
+                    if (showalert) {
+                      $rootScope.zmPopup = SecuredPopups.show('alert', {
+                        title: $translate.instant('kLoginValidatedTitle'),
+                        template: loginStatus,
+                        okText: $translate.instant('kButtonOk'),
+                        cancelText: $translate.instant('kButtonCancel'),
+                      }).then(function (res) {
 
-                  var user_cgi = (ld.streamingurl).toLowerCase();
-                  NVR.log("ZM relative cgi-path: " + zm_cgi + ", you entered: " + user_cgi);
-
-                  $http.get(ld.streamingurl + "/zms")
-                    .then(function (data) {
-                        data = data.data;
-                        NVR.debug("Urk! cgi-path returned  success, but it should not have come here");
-                        loginStatus = $translate.instant('kLoginStatusNoCgi');
-
-                        NVR.debug("refreshing API version...");
-                        NVR.getAPIversion()
-                          .then(function (data) {
-                              var refresh = NVR.getMonitors(1);
-                              $rootScope.apiVersion = data;
-                            },
-                            function (error) {
-                              var refresh = NVR.getMonitors(1);
-                              $rootScope.apiVersion = "0.0.0";
-                              NVR.debug("Error, failed API version, setting to " + $rootScope.apiVersion);
-                            });
-
-                        if (showalert) {
-                          $rootScope.zmPopup = SecuredPopups.show('alert', {
-                            title: $translate.instant('kLoginValidatedTitle'),
-                            template: loginStatus,
-                            okText: $translate.instant('kButtonOk'),
-                            cancelText: $translate.instant('kButtonCancel'),
-                          }).then(function (res) {
-
-                            $ionicSideMenuDelegate.toggleLeft();
-                            NVR.debug("Force reloading monitors...");
-
-                          });
-                        }
-                      },
-                      function (error, status) {
-                        // If its 5xx, then the cgi-bin path is valid
-                        // if its 4xx then the cgi-bin path is not valid
-
-                        if (status < 500) {
-                          loginStatus = $translate.instant('kLoginStatusNoCgiAlt');
-                        }
-
-                        if (showalert) {
-                          $rootScope.zmPopup = SecuredPopups.show('alert', {
-                            title: $translate.instant('kLoginValidatedTitle'),
-                            template: loginStatus,
-                            okText: $translate.instant('kButtonOk'),
-                            cancelText: $translate.instant('kButtonCancel'),
-                          }).then(function (res) {
-
-                            $ionicSideMenuDelegate.toggleLeft();
-                            NVR.debug("Force reloading monitors...");
-
-                          });
-                        } else // make sure CGI error is always shown
-                        {
-                          NVR.displayBanner((status < 500) ? 'error' : 'info', [loginStatus]);
-                        }
-                        NVR.debug("refreshing API version...");
-                        NVR.getAPIversion()
-                          .then(function (data) {
-                              var refresh = NVR.getMonitors(1);
-                              $rootScope.apiVersion = data;
-                            },
-                            function (error) {
-                              var refresh = NVR.getMonitors(1);
-                              $rootScope.apiVersion = "0.0.0";
-                              NVR.debug("Error, failed API version, setting to " + $rootScope.apiVersion);
-                            });
+                        $ionicSideMenuDelegate.toggleLeft();
+                        NVR.debug("Force reloading monitors...");
 
                       });
-                });
+                    }
+
+                  },
+                  function (error) {
+                    var refresh = NVR.getMonitors(1);
+                    $rootScope.apiVersion = "0.0.0";
+                    NVR.debug("Error, failed API version, setting to " + $rootScope.apiVersion);
+                  });
 
             },
             function (error) {
+
+              if ($rootScope.userCancelledAuth) {
+                return;
+              }
+
               NVR.displayBanner('error', [$translate.instant('kBannerAPICheckFailed'), $translate.instant('kBannerPleaseCheck')]);
               NVR.log("API login error " + JSON.stringify(error));
 

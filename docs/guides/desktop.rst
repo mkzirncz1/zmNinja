@@ -19,6 +19,11 @@ The following command line parameters are supported:
 
     --fs          - starts zmNinja in full screen mode
 
+    --lang        - specifies a language profile that will be used to display input 
+                    dates etc. Just switching a "language" in zmNinja does not affect browser
+                    default language. I currently don't know how to wire this to zmNinja's language
+                    as this is electron stuff so you'll have to pass it as command line.
+
 Multiple instances
 ------------------
 
@@ -105,9 +110,13 @@ Desktop data storage locations
 ------------------------------
 
 User data is typically stored in the following locations:
-- ``%APPDATA%/zmNinjaDesktop`` for Windows,
-- ``$XDG_CONFIG_HOME/zmNinjaDesktop`` or ``~/.config/zmNinjaDesktop`` for Linux, 
-- ``~/Library/Application Support/zmNinjaDesktop`` for OSX
+
+* ``~/Library/Application Support/zmNinjaDesktop`` for OSX
+
+* ``%APPDATA%/zmNinjaDesktop`` for Windows
+
+* ``$XDG_CONFIG_HOME/zmNinjaDesktop`` or ``~/.config/zmNinjaDesktop`` for Linux
+
 
 To completely remove the app, you may want to delete both the app
 bundle/binary and these locations as applicable on your system

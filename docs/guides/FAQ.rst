@@ -7,15 +7,13 @@ What is the minimum supported version of ZoneMinder, Android and iOS?
 You need a minimum of ZM 1.30.4 with APIs working. You may get it to run
 in previous versions, but I don't support them, so you are on your own.
 
-Starting version 1.3.26 of zmNinja, only IOS 10+ and Android 5.0+
-devices are supported.
+zmNinja is supported  only on IOS 11+ and Android 5.0+
 
 zmNinja Help
 ------------
 
-I've just started uploading instructional videos for zmNinja. I'll add
-more over time. See them
-`here <https://github.com/pliablepixels/zmNinja/wiki/Help-Videos-for-zmNinja>`__
+All screens have annotated descriptions now. They are maintained in a google document, so I can easily edit it in future. Click `here <https://docs.google.com/document/d/e/2PACX-1vS9z-ANNUbPRMhCWbS-PFJtB_6y6O_vwrZfLE6-TjPo3O0bPQeMUjjeTSXFvILU_w4ZTgU01CM9Hz8p/pub>`__ for the document.
+
 
 Asking for refunds
 ------------------
@@ -310,6 +308,14 @@ out later they skimmed details.
 -  Please enable ``AUTH_HASH_LOGINS`` as well as set ``AUTH_RELAY`` to
    "hashed"
 
+- If you are NOT using authentication in ZM, please turn OFF authentication in zmNinja too.
+  If you don't, zmNinja will keep waiting for an authentication token
+
+- If you are using multi-server, please make sure the user account has 
+  "System View" permissions. This is needed to get access to the server API. 
+  If zmNinja is unable to read the API, it will use the default portal URL, which
+  may fail.
+
 -  You think your APIs are working, but they are really not. If you open
    a browser and type in ``https://yourserver/zm/api/monitors.json`` and
    you see some text on top followed by monitor data, your APIs are
@@ -335,6 +341,9 @@ out later they skimmed details.
    can use in zmNinja.
 
 For example:
+
+.. image:: img/inspect-source.png
+   :width: 600
 
 In the above case my zmNinja cgi-bin setting is
 ``https://myserver:myport/zm/cgi-bin``
@@ -501,6 +510,18 @@ I can't see streams: you have cgi-bin issues
    zoneminder->options->paths and check the value of the cgi-bin path -
    your zmNinja path will be "base path of your server" + cgi-bin path.
 
+I can't see some streams (some work): you have multi-server access issues
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+If you are in a situation where some live streams work and some don't,
+it is possible you are using multi-server. In this case, you need to make 
+sure the user account has "view" privileges for "System". zmNinja uses the 
+``/server.json`` API to get multi-server data so it can figure out which IP:port
+is used for streaming for that server. If it fails, it will fallback to the portal
+URL which will likely be wrong. 
+
+
+
 zmNinja montage does not seem smooth - feeds seem a little delayed compared to ZM console
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -586,6 +607,21 @@ image etc. I limit this to 5 because I need 1 for control messages.
 
 Other misc. issues
 ------------------
+
+APIs seem to work in the browser but zmNinja says APIs don't work
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+There could be several reasons, but this one is common: look in the logs. If you see something like:
+
+::
+
+  DEBUG **EXCEPTION**SyntaxError: Unexpected token < in JSON at position 0 caused by undefined.
+
+Then that means the ZM API layer is throwing warning messages which you don't see in your browser, but will show up
+if you do an inspect source. The solution is to edit ``/usr/share/zoneminder/www/api/app/Config/core.php`` 
+(or whichever path your ZM is installed in) and around line 34-ish, you'll see something like ``Configure::write('debug',2)``.
+Change it to ``Configure::write('debug',0)``
+
+
 
 I suddently see an error message saying I need to enable ZM\_AUTH\_HASH\_LOGINS. This wasn't there before
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -709,6 +745,10 @@ Nope. It only sends the latest events. What it does is before sending
 push notifications, it checks if the last time a push was sent for this
 monitor is < the time you specified. If it is, it does not send. That's
 all.
+
+When I switch languages, date/time inputs don't follow my locale in zmNinja Desktop
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The only screen I am aware of where there is a date/time input is ``Events->Filter Events``. This happens because the desktop version uses an embedded chromium version which seems to default to ``en-us``. To work around this, you can start the desktop app with a ``--lang='<locale code>'`` option. Example ``--lang='ru'``. Note that you will have to do this each time and is completely related to any language you may choose in zmNinja. Thel language in zmNinja is only used to translate text strings. Nothing else. For an extended discussion see `this issue <https://github.com/pliablepixels/zmNinja/issues/875>`__. 
 
 Is zmNinja free?
 ----------------

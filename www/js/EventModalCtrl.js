@@ -1,3 +1,4 @@
+ 
 // Common Controller for the montage view
 /* jshint -W041 */
 /* jslint browser: true*/
@@ -12,6 +13,8 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
     ACTIVE: 2, // using zms
     STOPPED: 3 // starts off in this mode
   };
+
+
   // from parent scope
   var currentEvent = $scope.currentEvent;
   var nphTimer;
@@ -27,7 +30,9 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
   //var isGlobalFid = false; // true if its set to MaxScoreFrameId in events
   var eventId = 0;
   var isSnapShotEnabled = false;
+  var playState = 'play';
 
+  $scope.useFilters = true;
 
 
   var broadcastHandles = [];
@@ -46,7 +51,8 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
 
   var frameoptions = [];
 
-  var eventImageDigits = 5; // failsafe
+  
+  var eventImageDigits = 5; // failsafe 
   $scope.currentProgress = {
     progress: 0
   };
@@ -194,6 +200,13 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
 
   };
 
+
+  $scope.onPlayerState = function (state) {
+    // parent scope
+    playState = state;
+    $scope.lastVideoStateTime.time = moment();
+  };
+
   $scope.onPlayerReady = function (api) {
 
     // we need this timeout to avoid load interrupting
@@ -247,7 +260,8 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
     var rate = NVR.getLogin().videoPlaybackSpeed;
     NVR.debug ("Invoking play at rate:"+rate+" as video can be played");
     handle.setPlayback (rate);
-    handle.play();
+    if (playState== 'play') handle.play();
+
   };
 
   $scope.onVideoError = function (event) {
@@ -591,7 +605,7 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
         // console.log ("STEP 0 progress is " + $scope.currentProgress.progress);
         $scope.slides = [];
 
-        var apiurl = $scope.loginData.apiurl + "/events/" + $scope.eventId + ".json";
+        var apiurl = $scope.loginData.apiurl + "/events/" + $scope.eventId + ".json?"+$rootScope.authSession;
         NVR.debug("prepared to get frame details using " + apiurl);
         $http.get(apiurl)
           .then(function (success) {
@@ -724,13 +738,10 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
 
       url = $scope.playbackURL + '/index.php?view=image&rand=' + $rootScope.rand +
         "&eid=" + $scope.eventId +
-        "&fid=" + $scope.slides[$scope.mycarousel.index - 1].id;
+        "&fid=" + $scope.slides[$scope.mycarousel.index - 1].id + $rootScope.authSession;
     
 
-    if ($rootScope.authSession != 'undefined') {
-      url += $rootScope.authSession;
-
-    }
+    
     if ($rootScope.basicAuthToken) {
       url += "&basicauth=" + $rootScope.basicAuthToken;
 
@@ -757,12 +768,9 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
             if ($scope.slideIndex > 0) $scope.slideIndex--;
 
        
-              $scope.selectEventUrl = $scope.playbackURL + '/index.php?view=image&rand=' + $rootScope.rand + "&eid=" + $scope.eventId + "&fid=" + $scope.slides[$scope.slideIndex].id;
+              $scope.selectEventUrl = $scope.playbackURL + '/index.php?view=image&rand=' + $rootScope.rand + "&eid=" + $scope.eventId + "&fid=" + $scope.slides[$scope.slideIndex].id+ $rootScope.authSession;
             
-            if ($rootScope.authSession != 'undefined') {
-              $scope.selectEventUrl += $rootScope.authSession;
-
-            }
+           
             if ($rootScope.basicAuthToken) {
               $scope.selectEventUrl += "&basicauth=" + $rootScope.basicAuthToken;
 
@@ -783,12 +791,9 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
             if ($scope.slideIndex < $scope.slideLastIndex) $scope.slideIndex++;
 
        
-              $scope.selectEventUrl = $scope.playbackURL + '/index.php?view=image&rand=' + $rootScope.rand + "&eid=" + $scope.eventId + "&fid=" + $scope.slides[$scope.slideIndex].id;
+              $scope.selectEventUrl = $scope.playbackURL + '/index.php?view=image&rand=' + $rootScope.rand + "&eid=" + $scope.eventId + "&fid=" + $scope.slides[$scope.slideIndex].id+ $rootScope.authSession;
             
-            if ($rootScope.authSession != 'undefined') {
-              $scope.selectEventUrl += $rootScope.authSession;
-
-            }
+          
             if ($rootScope.basicAuthToken) {
               $scope.selectEventUrl += "&basicauth=" + $rootScope.basicAuthToken;
 
@@ -810,12 +815,8 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
             $scope.slideIndex = tempVar;
 
        
-              $scope.selectEventUrl = $scope.playbackURL + '/index.php?view=image&rand=' + $rootScope.rand + "&eid=" + $scope.eventId + "&fid=" + $scope.slides[$scope.slideIndex].id;
-            
-            if ($rootScope.authSession != 'undefined') {
-              $scope.selectEventUrl += $rootScope.authSession;
-
-            }
+              $scope.selectEventUrl = $scope.playbackURL + '/index.php?view=image&rand=' + $rootScope.rand + "&eid=" + $scope.eventId + "&fid=" + $scope.slides[$scope.slideIndex].id+ $rootScope.authSession;
+           
             if ($rootScope.basicAuthToken) {
               $scope.selectEventUrl += "&basicauth=" + $rootScope.basicAuthToken;
 
@@ -837,12 +838,9 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
             if ($scope.slideIndex < $scope.slideLastIndex) $scope.slideIndex++;
 
           
-              $scope.selectEventUrl = $scope.playbackURL + '/index.php?view=image&rand=' + $rootScope.rand + "&eid=" + $scope.eventId + "&fid=" + $scope.slides[$scope.slideIndex].id;
+              $scope.selectEventUrl = $scope.playbackURL + '/index.php?view=image&rand=' + $rootScope.rand + "&eid=" + $scope.eventId + "&fid=" + $scope.slides[$scope.slideIndex].id+ $rootScope.authSession;
             
-            if ($rootScope.authSession != 'undefined') {
-              $scope.selectEventUrl += $rootScope.authSession;
-
-            }
+           
             if ($rootScope.basicAuthToken) {
               $scope.selectEventUrl += "&basicauth=" + $rootScope.basicAuthToken;
 
@@ -1015,6 +1013,7 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
     //console.log ("STREAMSTATE ="+currentStreamState);
     if ($scope.animationInProgress) return "";
     var stream = "";
+    //console.log ("SNAPSHOT FID IS "+$scope.snapshotFrameId );
     // eventId gets populated when prepareModal completes
     if (currentStreamState == streamState.STOPPED || !$scope.eventId) {
       stream = "";
@@ -1041,7 +1040,7 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
     //console.log ("EID="+$scope.eventId);
     if ($rootScope.basicAuthToken && stream) stream += "&basicauth=" + $rootScope.basicAuthToken;
 
-    //console.log ("STREAM="+stream);
+    //console.log ("SNAPSHOT IS:="+$scope.snapshotFrameId );
     return stream;
 
   };
@@ -1071,12 +1070,19 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
     $scope.alarm_images = [];
     $scope.snapshotFrameId = 1;
     currentStreamState = streamState.STOPPED;
+    
+
 
   });
 
+  $scope.showHideControls = function () {
+    $scope.displayControls = !$scope.displayControls;
+    NVR.debug ('control display is:'+$scope.displayControls);
+  };
 
   $scope.$on('modal.shown', function (e, m) {
 
+    $scope.displayControls = true;
     $ionicLoading.hide();
     if (m.id != 'footage')
       return;
@@ -1110,6 +1116,7 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
       NVR.debug("If recording is in progress, live feed will be shown");
     }
     $scope.isToggleListMenu = true;
+    $scope.isToggleListEventParamsMenu = false;
     $scope.videoDynamicTime = "";
     $scope.videoIsReady = false;
     var ld = NVR.getLogin();
@@ -1250,7 +1257,8 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
 
   $scope.$on('modal.removed', function (e, m) {
 
-    $ionicSideMenuDelegate.canDragContent(true);
+    if (!m.disableDrag )
+      $ionicSideMenuDelegate.canDragContent(true);
     if ($rootScope.platformOS == 'desktop') {
       NVR.debug("Removing keyboard handler");
       window.removeEventListener('keydown', keyboardHandler, true);
@@ -1336,10 +1344,55 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
 
   };
 
+  $scope.toggleFilters = function () {
+    $scope.useFilters=!$scope.useFilters;
+    $scope.nextId = "...";
+    $scope.prevId = "...";
+    neighborEvents($scope.eventId)
+    .then(function (success) {
+        $scope.nextId = success.next;
+        $scope.prevId = success.prev;
+      },
+      function (error) {
+        //console.log(JSON.stringify(error));
+      });
+
+  };
+
+  $scope.toggleFollowSameMonitor = function () {
+
+    if ($scope.followSameMonitor == '1') {
+      NVR.debug ('followSame Monitor was 1, making null');
+      $scope.followSameMonitor = '';
+    } else {
+      NVR.debug ('followSame Monitor was null, making 1');
+      $scope.followSameMonitor = '1';
+    }
+    $scope.nextId = "...";
+    $scope.prevId = "...";
+    neighborEvents($scope.eventId)
+    .then(function (success) {
+        $scope.nextId = success.next;
+        $scope.prevId = success.prev;
+      },
+      function (error) {
+        //console.log(JSON.stringify(error));
+      });
+
+
+  };
+
   $scope.toggleListMenu = function () {
 
     $scope.isToggleListMenu = !$scope.isToggleListMenu;
   };
+
+  $scope.toggleListEventParamsMenu = function () {
+
+    $scope.isToggleListEventParamsMenu = !$scope.isToggleListEventParamsMenu;
+  };
+
+ 
 
   $scope.toggleGapless = function () {
     // console.log(">>>>>>>>>>>>>>GAPLESS TOGGLE INSIDE MODAL");
@@ -1375,7 +1428,9 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
 
   // This function returns neighbor events if applicable
 
-
+  function noop() {
+    
+  }
 
 
   function neighborEvents(eid, mid) {
@@ -1392,20 +1447,24 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
     var d = $q.defer();
     // now get event details to show alarm frames
     var loginData = NVR.getLogin();
-    var myurl = loginData.apiurl + '/events/' + eid + ".json";
-
     var nextEvent = loginData.apiurl + "/events/index" +
       "/StartTime >: " + currentEvent.Event.StartTime +
-      ($scope.followSameMonitor == '1' ? "/MonitorId =: " + currentEvent.Monitor.Id : "") +
-      "/AlarmFrames >=: " + (loginData.enableAlarmCount ? loginData.minAlarmCount : 0) +
-      ".json?sort=StartTime&direction=asc&limit=1";
-
+      ($scope.followSameMonitor == '1' ? "/MonitorId =: " + currentEvent.Monitor.Id : "") ;
+      if ($scope.useFilters) {
+        nextEvent = nextEvent + "/AlarmFrames >=: " + (loginData.enableAlarmCount ? loginData.minAlarmCount : 0);
+      }
+      nextEvent = nextEvent + ".json?sort=StartTime&direction=asc&limit=1"+$rootScope.authSession;
+      
 
     var prevEvent = loginData.apiurl + "/events/index" +
       "/StartTime <: " + currentEvent.Event.StartTime +
-      ($scope.followSameMonitor == '1' ? "/MonitorId =: " + currentEvent.Monitor.Id : "") +
-      "/AlarmFrames >=: " + (loginData.enableAlarmCount ? loginData.minAlarmCount : 0) +
-      ".json?sort=StartTime&direction=desc&limit=1";
+      ($scope.followSameMonitor == '1' ? "/MonitorId =: " + currentEvent.Monitor.Id : "");
+
+      if ($scope.useFilters) {
+        prevEvent = prevEvent + "/AlarmFrames >=: " + (loginData.enableAlarmCount ? loginData.minAlarmCount : 0);
+      }
+      prevEvent = prevEvent + ".json?sort=StartTime&direction=desc&limit=1"+$rootScope.authSession;
+
 
 
     NVR.debug("Neighbor next URL=" + nextEvent);
@@ -1446,7 +1505,8 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
         d.reject(neighbors);
         return (d.promise);
 
-      });
+      })
+      .catch (noop);
 
     return (d.promise);
 
@@ -1485,7 +1545,7 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
     //$scope.eventList.showDelete = false;
     //curl -XDELETE http://server/zm/api/events/1.json
     var loginData = NVR.getLogin();
-    var apiDelete = loginData.apiurl + "/events/" + id + ".json";
+    var apiDelete = loginData.apiurl + "/events/" + id + ".json?"+$rootScope.authSession;
     NVR.debug("DeleteEvent: ID=" + id);
     NVR.log("Delete event " + apiDelete);
 
@@ -1540,7 +1600,12 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
 
   $scope.onSwipeEvent = function (eid, dirn) {
 
-    console.log("CALLED WITH " + eid + " dirn " + dirn);
+    var diff = moment().diff($scope.lastVideoStateTime.time);
+      if (diff <= 1000) {
+        NVR.debug ("Not swiping, time interval was only:"+diff+" ms");
+        return;
+      }
+    //console.log("CALLED WITH " + eid + " dirn " + dirn);
     if ($ionicScrollDelegate.$getByHandle("imgscroll").getScrollPosition().zoom != 1) {
       //console.log("Image is zoomed in - not honoring swipe");
       return;
@@ -1563,7 +1628,13 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
   };
 
   function jumpToEvent(eid, dirn) {
-    $scope.snapshotFrameId = 1;
+
+    if (isSnapShotEnabled) {
+      $scope.snapshotFrameId = NVR.getSnapshotFrame();
+    } else {
+      $scope.snapshotFrameId = 1;
+    }
+    
     $scope.isPaused = false;
     //isGlobalFid = false;
     var oState;
@@ -1648,8 +1719,6 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
 
 
       }
-
-
 
       playerReady = false;
       $scope.defaultVideo = "";
@@ -1855,6 +1924,7 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
               $scope.nextId = success.next;
               $scope.prevId = success.prev;
               NVR.debug("Gapless move to event " + $scope.nextId);
+              playState = 'play';
               jumpToEvent($scope.nextId, 1);
             }, 1000);
           },
@@ -1929,7 +1999,7 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
       "&height=" + 200;
 
     if ($rootScope.authSession != 'undefined') frame += $rootScope.authSession;
-    frame += NVR.insertBasicAuthToken();
+    frame += NVR.insertSpecialTokens();
     //console.log ("alarm:"+frame);
     return frame;
   };
@@ -1946,10 +2016,9 @@ angular.module('zmApp.controllers').controller('EventModalCtrl', ['$scope', '$ro
   function prepareModalEvent(eid) {
 
 
-
     // Lets get the detailed event API
     var loginData = NVR.getLogin();
-    var myurl = loginData.apiurl + '/events/' + eid + ".json";
+    var myurl = loginData.apiurl + '/events/' + eid + ".json?"+$rootScope.authSession;
     NVR.log("*** Constructed API for detailed events: " + myurl);
     $scope.humanizeTime = "...";
     $scope.mName = "...";

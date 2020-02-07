@@ -2,7 +2,7 @@
 /* jslint browser: true*/
 /* global cordova,StatusBar,angular,console */
 
-angular.module('zmApp.controllers').controller('MenuController', ['$scope', '$ionicSideMenuDelegate', 'zm', '$stateParams', '$ionicHistory', '$state', 'NVR', '$rootScope', '$ionicPopup', '$translate', '$timeout', '$location', 'EventServer', 'zmAutoLogin', '$http', 'SecuredPopups', function ($scope, $ionicSideMenuDelegate, zm, $stateParams, $ionicHistory, $state, NVR, $rootScope, $ionicPopup, $translate, $timeout, $location, EventServer, zmAutoLogin, $http, SecuredPopups) {
+angular.module('zmApp.controllers').controller('MenuController', ['$scope', '$ionicSideMenuDelegate', 'zm', '$stateParams', '$ionicHistory', '$state', 'NVR', '$rootScope', '$ionicPopup', '$translate', '$timeout', '$location', 'EventServer', 'zmAutoLogin', '$http', 'SecuredPopups', '$ionicLoading', function ($scope, $ionicSideMenuDelegate, zm, $stateParams, $ionicHistory, $state, NVR, $rootScope, $ionicPopup, $translate, $timeout, $location, EventServer, zmAutoLogin, $http, SecuredPopups, $ionicLoading) {
   $scope.openMenu = function () {
     $ionicSideMenuDelegate.toggleLeft();
   };
@@ -38,10 +38,60 @@ angular.module('zmApp.controllers').controller('MenuController', ['$scope', '$io
         window.stop();
         // after window stop executes, in next cycle
         // this _should_ ensure stop concludes before
-        // exit/entry lifecycles kick in?
+        // exit/entry lifecycles kick in?z
+        
         $timeout (function() {$state.go(view,args);});
         
       });*/
+
+  };
+
+  $scope.exitKiosk = function() {
+    $scope.data = {};     
+    // An elaborate, custom popup
+    var myPopup = $ionicPopup.show({
+      template: '<small>'+$translate.instant('kKioskPassword')+'</small><input type="password" ng-model="data.p1"><br/><small>',
+      title: $translate.instant('kPassword'),
+      scope: $scope,
+      buttons: [
+        { text: $translate.instant('kButtonCancel'),
+            type: 'button-assertive',
+            onTap: function (e) {
+              $ionicSideMenuDelegate.toggleLeft();
+            }
+        },
+        {
+          text: '<b>'+$translate.instant('kButtonSave')+'</b>',
+          type: 'button-positive',
+          onTap: function(e) {
+            if (!$scope.data.p1) {
+              //don't allow the user to close unless he enters wifi password
+              e.preventDefault();
+            } else {
+              var ld = NVR.getLogin();
+              if ($scope.data.p1 == ld.kioskPassword) {
+                ld.isKiosk = false;
+                NVR.setLogin(ld);
+              }
+              else {
+                    $ionicLoading.show({
+                        template: $translate.instant('kBannerPinMismatch') + "...",
+                        noBackdrop: true,
+                        duration: 1500
+                    });
+                  NVR.log ("Kiosk code mistmatch");
+                 // $scope.loginData.isKiosk = false;
+                  e.preventDefault();
+              }
+              
+            }
+          }
+        }
+      ]
+    });
+
+
+   
 
   };
 
@@ -50,7 +100,7 @@ angular.module('zmApp.controllers').controller('MenuController', ['$scope', '$io
     $rootScope.alarmCount = 0;
     $rootScope.isAlarm = false;
     $rootScope.authSession = '';
-
+    //console.log ("******************* AUTHSESSION RESET!!!!!!");
 
 
 
@@ -99,7 +149,7 @@ angular.module('zmApp.controllers').controller('MenuController', ['$scope', '$io
         cordova.plugin.http.setSSLCertMode('nocheck', function () {
           NVR.debug('--> SSL is permissive, will allow any certs. Use at your own risk.');
         }, function () {
-          console.log('-->Error setting SSL permissive');
+          NVR.log('-->Error setting SSL permissive');
         });
 
         if ($rootScope.platformOS == 'android') {
@@ -134,7 +184,8 @@ angular.module('zmApp.controllers').controller('MenuController', ['$scope', '$io
     }
 
 
-    var apiurl = loginData.apiurl + '/host/getVersion.json';
+    
+
     //var portalurl = loginData.url + '/index.php';
 
     zmAutoLogin.doLogin("<button class='button button-clear' style='line-height: normal; min-height: 0; min-width: 0;  color:#fff;' ng-click='$root.cancelAuth()'><i class='ion-close-circled'></i>&nbsp;" + $translate.instant('kAuthenticating') + "...</button>")
@@ -144,11 +195,15 @@ angular.module('zmApp.controllers').controller('MenuController', ['$scope', '$io
       // box
 
       .then(function (data) {
-
-
+        zmAutoLogin.start();
         // possible image digits changed between servers
         NVR.getKeyConfigParams(0);
         $rootScope.runMode = NVR.getBandwidth();
+        //console.log ("HERE");
+        var apiurl = loginData.apiurl + '/host/getVersion.json?'+$rootScope.authSession;
+
+    //console.log ("****** MENU CONTROLLER:"+apiurl);
+
         NVR.log("Validating APIs at " + apiurl);
         $http.get(apiurl)
           .then(function (data) {
@@ -185,7 +240,7 @@ angular.module('zmApp.controllers').controller('MenuController', ['$scope', '$io
                                     disableBack: true
                                   });
 
-                                  console.log("+++ state go after getMonitors force");
+                                  //console.log("+++ state go after getMonitors force");
                                   $state.go('app.refresh', {
                                     "view": $state.current.name
                                   });
@@ -197,7 +252,7 @@ angular.module('zmApp.controllers').controller('MenuController', ['$scope', '$io
                             function (error) {
                               var refresh = NVR.getMonitors(1)
                                 .then(function () {
-                                  console.log("+++ state go after API version error: " + error);
+                                  //console.log("+++ state go after API version error: " + error);
                                   $rootScope.apiVersion = "0.0.0";
                                   NVR.debug("Error, failed API version, setting to " + $rootScope.apiVersion);
 
@@ -238,7 +293,7 @@ angular.module('zmApp.controllers').controller('MenuController', ['$scope', '$io
                                     disableBack: true
                                   });
 
-                                  console.log("+++ state go after 5xx");
+                                  //console.log("+++ state go after 5xx");
                                   $state.go('app.refresh', {
                                     "view": $state.current.name
                                   });
@@ -254,7 +309,7 @@ angular.module('zmApp.controllers').controller('MenuController', ['$scope', '$io
                                   $ionicHistory.nextViewOptions({
                                     disableBack: true
                                   });
-                                  console.log("+++ state go after API version force");
+                                  //console.log("+++ state go after API version force");
                                   $state.go('app.refresh', {
                                     "view": $state.current.name
                                   });
@@ -269,6 +324,10 @@ angular.module('zmApp.controllers').controller('MenuController', ['$scope', '$io
 
             },
             function (error) {
+
+              if ($rootScope.userCancelledAuth) {
+                return;
+              }
               NVR.displayBanner('error', [$translate.instant('kBannerAPICheckFailed'), $translate.instant('kBannerPleaseCheck')]);
               NVR.log("API login error " + JSON.stringify(error));
 
@@ -325,7 +384,18 @@ angular.module('zmApp.controllers').controller('MenuController', ['$scope', '$io
 
             }
             if (NVR.getLogin().serverName != $scope.newServer.val)
-              switchToServer($scope.newServer.val);
+            {
+              NVR.flushAPICache()
+              .then (function() {
+                switchToServer($scope.newServer.val);
+              })
+              .catch (function(err) {
+                NVR.debug ('Error clearing cache:'+JSON.stringify(err));
+                switchToServer($scope.newServer.val);
+              });
+            }
+            
+              
 
             //$rootScope.$broadcast('server-changed');
 
@@ -338,6 +408,35 @@ angular.module('zmApp.controllers').controller('MenuController', ['$scope', '$io
 
 
 
+  };
+
+
+  $scope.flushAPICache = function() {
+
+    NVR.flushAPICache()
+    .then ( function () {
+      showCachePopup($translate.instant('kFlushAllCachesMessageOk'));
+    })
+    .catch (function (err) {
+      showCachePopup($translate.instant('kFlushAllCachesMessageOk')+JSON.stringify(err));
+    });
+
+    function showCachePopup(str) {
+      $rootScope.zmPopup = $ionicPopup.alert({
+        template: str,
+  
+        title: $translate.instant('kNote'),
+  
+        buttons: [
+          {
+            text: $translate.instant('kButtonOk'),
+          }
+        ]
+      });
+  
+      
+    }
+   
   };
 
 

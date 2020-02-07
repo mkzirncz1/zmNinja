@@ -1,4 +1,5 @@
 #!/bin/bash
+SDK_VERSION='29.0.2'
 
 
 build_debug() {
@@ -48,7 +49,8 @@ build_release() {
             cp "$NINJAKEYSTORE" platforms/android/
 
             # Make sure native builds are only deployed in devices >= Android 5
-            cordova build android --release -- --minSdkVersion=21 --versionCode=${ver}
+            # minSdk and targetSdk version are in config.xml
+            cordova build android --release --  --versionCode=${ver}
 
             # copy build to release folder and sign
             cp platforms/android/app/build/outputs/apk/release/app-release-unsigned.apk release_files/android-release-unsigned.apk
@@ -56,7 +58,7 @@ build_release() {
 
             cd release_files/
             jarsigner -verbose -sigalg SHA1withRSA -digestalg SHA1 -keystore ../platforms/android/zmNinja.keystore android-release-unsigned.apk zmNinja
-            ~/Library/Android/sdk/build-tools/25.0.2/zipalign -v 4 android-release-unsigned.apk zmNinja.apk
+            ~/Library/Android/sdk/build-tools/${SDK_VERSION}/zipalign -v 4 android-release-unsigned.apk zmNinja.apk
             rm -f android-release-unsigned.apk 
             cd ..
 
@@ -69,8 +71,8 @@ build_release() {
             echo "***VERSION CODE CHECKS:"
             for f in release_files/*; do
                 echo "$f:"
-                `echo $ANDROID_HOME`/build-tools/23.0.1/aapt dump badging $f | grep versionCode
-                `echo $ANDROID_HOME`/build-tools/23.0.1/aapt dump badging $f | grep native-code
+                `echo $ANDROID_HOME`/build-tools/${SDK_VERSION}/aapt dump badging $f | grep versionCode
+                `echo $ANDROID_HOME`/build-tools/${SDK_VERSION}/aapt dump badging $f | grep native-code
             done
 
   }

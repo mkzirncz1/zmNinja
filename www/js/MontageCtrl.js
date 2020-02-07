@@ -17,6 +17,8 @@ angular.module('zmApp.controllers')
     var intervalHandleMontageCycle;
     var intervalHandleReloadPage;
     var intervalHandleEventStatus;
+    var intervalHandleStreamQuery;
+
 
     var gridcontainer;
     var pckry, draggie;
@@ -30,16 +32,19 @@ angular.module('zmApp.controllers')
     var reloadPage = zm.forceMontageReloadDelay;
     var viewCleaned = false;
     var randToAvoidCacheMem;
+    var beforeReorderPositions=[];
 
+    var streamQueryTimer;
 
     var streamState = {
       SNAPSHOT: 1,
-      ACTIVE: 2,
-      STOPPED: 3,
-      PAUSED: 4
+      SNAPSHOT_LOWQUALITY:2,
+      ACTIVE: 3,
+      STOPPED: 4,
+      PAUSED: 5
     };
 
-    var currentStreamState = streamState.SNAPSHOT; // first load snapshot
+    var currentStreamState = streamState.SNAPSHOT_LOWQUALITY; // first load snapshot
     $scope.isModalStreamPaused = false; // used in Monitor Modal
 
     //var reloadPage = 30;
@@ -57,59 +62,6 @@ angular.module('zmApp.controllers')
       NVR.debug ("Auth success, recomputing rand value...");
       randEachTime();
 
-      /* var tnow = new Date();
-      var s = Math.round((tnow - timeInMontage) / 1000);
-      NVR.debug ("Montage re-auth: time since we are here: " + s + 
-     " seconds");
-      if (s >= 20)  {// lets not regen connkey if we just got into montage
-        NVR.debug ("Montage-reauth: Regenerating connkeys");
-        $timeout(function () { // after render
-          if (simulStreaming) {
-            NVR.debug("Re-creating all stream connkeys in montage ...");
-            NVR.regenConnKeys();
-            $scope.monitors = NVR.getMonitorsNow();
-            $scope.MontageMonitors = angular.copy($scope.monitors);
-            $timeout(function () // after render
-              {
-                initPackery();
-              }, zm.packeryTimer);
-  
-  
-          }
-        });
-      }
-      else {
-        NVR.debug ("Montage re-auth: ignoring as time is only "+s+" seconds");
-      }*/
-      // do nothing, we are reloading here anyway?
-      /*
-      if ($scope.singleMonitorModalOpen) {
-        NVR.debug("Montage: Not creating streams, as modal is open");
-        return;
-      }
-
-
-      NVR.debug("Montage Re-auth handler");
-
-      //streamState = true;
-
-      $timeout(function () { // after render
-        if (simulStreaming) {
-          NVR.debug("Re-creating all stream connkeys in montage ...");
-          NVR.regenConnKeys();
-          $scope.monitors = NVR.getMonitorsNow();
-          $scope.MontageMonitors = angular.copy($scope.monitors);
-          $timeout(function () // after render
-            {
-              initPackery();
-            }, zm.packeryTimer);
-
-
-        }
-      });
-      broadcastHandles.push(as);
-      //console.log (">>>>>>>>>>>>>>>>>>>>>>>>>>>AS="+as);
-      */
     });
 
     //--------------------------------------------------------------------------------------
@@ -129,11 +81,22 @@ angular.module('zmApp.controllers')
       NVR.displayBanner('net', [ds]);
       var ld = NVR.getLogin();
       refreshSec = (NVR.getBandwidth() == 'lowbw') ? ld.refreshSecLowBW : ld.refreshSec;
+      streamQueryTimer = (NVR.getBandwidth() == 'lowbw') ? zm.streamQueryStatusTimeLowBW: zm.streamQueryStatusTime;
+
 
       $interval.cancel(intervalHandleMontage);
       $interval.cancel(intervalHandleMontageCycle);
       $interval.cancel(intervalHandleReloadPage);
+      $interval.cancel(intervalHandleStreamQuery);
 
+      if (simulStreaming){
+       
+        intervalHandleStreamQuery = $interval(function () {
+          loadStreamQueryStatus();
+          //  console.log ("Refreshing Image...");
+        }.bind(this), streamQueryTimer);
+
+      }
 
       intervalHandleMontage = $interval(function () {
         loadNotifications();
@@ -196,6 +159,12 @@ angular.module('zmApp.controllers')
         
     };*/
 
+    function jiggleMontage() {
+      if ($scope.reOrderActive) return;
+      NVR.debug ('window resized');
+      //initPackery();
+    }
+
 
     function forceReloadPage() {
 
@@ -257,7 +226,7 @@ angular.module('zmApp.controllers')
            duration: zm.loadingTimeout
        });*/
 
-      currentStreamState = streamState.SNAPSHOT;
+      currentStreamState = streamState.SNAPSHOT_LOWQUALITY;
 
       $scope.areImagesLoading = true;
       var progressCalled = false;
@@ -339,7 +308,11 @@ angular.module('zmApp.controllers')
         // lay out every image if a pre-arranged position has not been found
 
         $timeout(function () {
-          if (layouttype || 1) pckry.layout();
+          if (layouttype)  { 
+            pckry.layout();
+          } else {
+            pckry.shiftLayout();
+          }
         }, 100);
 
         progressCalled = true;
@@ -371,38 +344,31 @@ angular.module('zmApp.controllers')
         NVR.debug("All images loaded, but some broke, switching to snapshot...");
         //console.log ("******** ALL IMAGES LOADED");
         // $scope.$digest();
-        allImagesLoadedOrFailed();
+        $timeout (function () {
+          allImagesLoadedOrFailed();
+        },100);
+        
       });
 
       function allImagesLoadedOrFailed() {
 
-
-        $timeout(function () {
-          $scope.areImagesLoading = false;
-        });
-
+        $scope.areImagesLoading = false;
         currentStreamState = streamState.SNAPSHOT;
-
         if (simulStreaming) {
-
-          $timeout(function () {
-            NVR.debug("Switching mode to active...");
+          $timeout (function () {
+            NVR.debug("Switching mode to streaming as multi-port on...");
+            //NVR.regenConnKeys();
+            //randEachTime();
             currentStreamState = streamState.ACTIVE;
-          }, 100);
-        }
+
+          },300);
+         
+        } 
+        
 
 
         $ionicLoading.hide();
-
-        if (!progressCalled) {
-          NVR.log("***  PROGRESS WAS NOT CALLED");
-          // pckry.reloadItems();
-        }
-
-        $timeout(function () {
-
           pckry.getItemElements().forEach(function (itemElem) {
-
             draggie = new Draggabilly(itemElem);
             pckry.bindDraggabillyEvents(draggie);
             draggies.push(draggie);
@@ -430,48 +396,51 @@ angular.module('zmApp.controllers')
             }
 
             NVR.debug("All images loaded, doing image layout");
+            $timeout(function () {
+              //NVR.log("Force calling resize");
+              ///pckry.reloadItems();
+              ///positions is defined only if layouttype was false
+              //(">>> Positions is " + JSON.stringify(positions));
+              if (!layouttype && positions) pckry.initShiftLayout(positions, "data-item-id");
+              // now do a jiggle 
+              $timeout(function () {
+                NVR.debug("inside drag items:doing the jiggle and dance...");
+                pckry.shiftLayout();
+                //$scope.squeezeMonitors();
+              }, 500);
+  
+            }, 100);
 
           }
-          $timeout(function () {
-            //NVR.log("Force calling resize");
-            ///pckry.reloadItems();
-            ///positions is defined only if layouttype was false
-            //(">>> Positions is " + JSON.stringify(positions));
-            if (!layouttype && positions) pckry.initShiftLayout(positions, "data-item-id");
-            // now do a jiggle 
-            $timeout(function () {
-              NVR.debug("doing the jiggle and dance...");
-              pckry.resize(true);
-              $scope.squeezeMonitors();
-            }, 500);
-
-          }, 100);
+       
 
           //pckry.onresize();
 
-        }, 20);
 
       }
 
       function itemDragged(item) {
         NVR.debug("drag complete");
-        $timeout(function () {
+       /* $timeout(function () {
           pckry.shiftLayout();
-        }, 20);
+        }, 20);*/
 
-        pckry.once('layoutComplete', function () {
+     
+          $timeout (function () {
+            var positions = pckry.getShiftPositions('data-item-id');
+            //console.log ("POSITIONS MAP " + JSON.stringify(positions));
+            var ld = NVR.getLogin();
+            ld.packeryPositions = JSON.stringify(positions);
+            //  console.log ("Saving " + ld.packeryPositions);
+            // console.log ("FULL OBJECT "+ JSON.stringify(ld));
+            ld.currentMontageProfile = "";
+            $scope.currentProfileName = $translate.instant('kMontage');
+            NVR.setLogin(ld);
+            NVR.debug("saved new positions: " + ld.packeryPositions);
+            //pckry.reloadItems();
+          },300);
+         
 
-          var positions = pckry.getShiftPositions('data-item-id');
-          //console.log ("POSITIONS MAP " + JSON.stringify(positions));
-          var ld = NVR.getLogin();
-          ld.packeryPositions = JSON.stringify(positions);
-          //  console.log ("Saving " + ld.packeryPositions);
-          // console.log ("FULL OBJECT "+ JSON.stringify(ld));
-          ld.currentMontageProfile = "";
-          $scope.currentProfileName = $translate.instant('kMontage');
-          NVR.setLogin(ld);
-          NVR.debug("saved new positions");
-        });
 
         //pckry.getItemElements().forEach(function (itemElem) {
 
@@ -631,23 +600,47 @@ angular.module('zmApp.controllers')
             apiurl += '/\'' + interval + '\' HOUR_SECOND';
         }*/
 
-        apiurl  += '.json?sort=StartTime&direction=desc&limit=1';
+        apiurl  += '.json?sort=StartTime&direction=desc&limit=1'+$rootScope.authSession;
 
-        NVR.debug ("Getting event count using:"+apiurl);
+        NVR.debug ("Getting event count ");
         $http.get(apiurl)
         .then (function (data) {
            // console.log ("EVENTS GOT: "+JSON.stringify(data));
             var res = data.data;
             var mid = monitor.Monitor.Id;
-            if (res.events.length == 0) res = undefined;
+            if (!res || !res.events) res = undefined;
+            else if (res.events.length == 0) res = undefined;
+            
             monitor.Monitor.lastEvent = res;
+
+            if (monitor.Monitor.lastEvent) {
+              var notes = res.events[0].Event.Notes;
+              if (notes.indexOf('detected:') != -1) {
+                monitor.Monitor.lastEvent.object = true;
+              }
+              else {
+                monitor.Monitor.lastEvent.object = false;
+              }
+
+            }
+            
+
             if (monitor.Monitor.lastEvent && showMontageSidebars) {
-                monitor.Monitor.showSidebar = true;
+
+                if (ld.objectDetectionFilter) {
+                  if (monitor.Monitor.lastEvent.object)  {
+                    monitor.Monitor.showSidebar = true; 
+                  } 
+                }
+                else {
+                  monitor.Monitor.showSidebar = true;
+                }
+                
             }
 
         },
         function (err) {
-            NVR.debug ("event status load failed: "+JSON.stringify(data));
+            NVR.debug ("event status load failed: "+JSON.stringify(err));
         });
     
 
@@ -707,7 +700,7 @@ angular.module('zmApp.controllers')
       var apiurl = NVR.getLogin().apiurl;
       //console.log ("ALARM CALLED WITH " +JSON.stringify(monitor));
 
-      var alarmurl = apiurl + "/monitors/alarm/id:" + monitor.Monitor.Id + "/command:status.json";
+      var alarmurl = apiurl + "/monitors/alarm/id:" + monitor.Monitor.Id + "/command:status.json?"+$rootScope.authSession;
       //  console.log("Alarm Check: Invoking " + alarmurl);
 
       $http.get(alarmurl)
@@ -743,8 +736,9 @@ angular.module('zmApp.controllers')
     }
 
     function randEachTime() {
+      
       randToAvoidCacheMem = new Date().getTime();
-
+      
       //$scope.randToAvoidCacheMem =  "1";
       //console.log ("Generating:"+$scope.randToAvoidCacheMem);
     }
@@ -788,7 +782,10 @@ angular.module('zmApp.controllers')
 
     $scope.cancelReorder = function () {
       $scope.modal.remove();
-      finishReorder();
+      $timeout ( function () {
+        finishReorder();
+      },300);
+  
     };
 
     $scope.saveReorder = function () {
@@ -796,61 +793,47 @@ angular.module('zmApp.controllers')
 
       $scope.modal.remove();
       $scope.MontageMonitors = $scope.copyMontage;
-      finishReorder();
-
+      // call finish reorder after modal is gone
+      $timeout ( function () {
+        finishReorder();
+      },300);
+      
     };
 
     function finishReorder() {
-
-      for (var i = 0; i < $scope.MontageMonitors.length; i++) {
-        $scope.MontageMonitors[i].Monitor.connKey = (Math.floor((Math.random() * 999999) + 1)).toString();
-      }
+  
       currentStreamState = streamState.STOPPED;
-      // don't call initPackery - we need to savePackeryOrder
-      $timeout(function () // after render
-        {
-          draggies.forEach(function (drag) {
-            drag.destroy();
-          });
 
-          pckry.reloadItems();
-          draggies = [];
-          pckry.once('layoutComplete', savePackeryOrder);
-          pckry.layout();
-        }, zm.packeryTimer);
+      for (var i=0; i < $scope.MontageMonitors.length; i++) {
+        var display= $scope.MontageMonitors[i].Monitor.listDisplay;
+        var id=$scope.MontageMonitors[i].Monitor.Id;
+        for (var j=0; j < beforeReorderPositions.length; j++) {
+          if (beforeReorderPositions[j].attr == id) {
+            beforeReorderPositions[j].display = display;
+            break;
+          }
+        } // before reorder array
+      } // montage monitors
 
-    }
+      console.log ("AFTER REORDER="+JSON.stringify(beforeReorderPositions));
 
-    function savePackeryOrder() {
-      $timeout(function () {
-        var positions = pckry.getShiftPositions('data-item-id');
-        NVR.debug("POSITIONS MAP " + JSON.stringify(positions));
-        var ld = NVR.getLogin();
-        ld.packeryPositions = JSON.stringify(positions);
+      for (var n = 0; i < $scope.MontageMonitors.length; i++) {
+        $scope.MontageMonitors[n].Monitor.connKey = NVR.regenConnKeys($scope.MontageMonitors[i]);
+      }
+
+      var ld = NVR.getLogin();
+      ld.packeryPositions = JSON.stringify(beforeReorderPositions);
         //console.log ("Savtogging " + ld.packeryPositions);
-        ld.currentMontageProfile = "";
-        $scope.currentProfileName = $translate.instant('kMontage');
-        NVR.setLogin(ld);
-
-        pckry.getItemElements().forEach(function (itemElem) {
-          draggie = new Draggabilly(itemElem);
-          pckry.bindDraggabillyEvents(draggie);
-          draggies.push(draggie);
-          draggie.disable();
-        });
-
-        $ionicScrollDelegate.$getByHandle("montage-delegate").scrollTop();
-
-        // Now also ask NVR to update its monitor display status
-        NVR.reloadMonitorDisplayStatus();
-        //$scope.MontageMonitors = angular.copy(NVR.getMonitorsNow());
-        //$scope.MontageMonitors = NVR.getMonitorsNow();
-        pckry.layout();
-
-
-        $scope.areImagesLoading = false;
-        currentStreamState = streamState.SNAPSHOT;
-
+      ld.currentMontageProfile = "";
+      $scope.currentProfileName = $translate.instant('kMontage');
+      NVR.setLogin(ld)
+      .then (function () {
+        initPackery();
+        //$ionicScrollDelegate.$getByHandle("montage-delegate").scrollTop();
+        //NVR.reloadMonitorDisplayStatus();
+        //$scope.areImagesLoading = false;
+        //currentStreamState = streamState.SNAPSHOT;
+        /*
         if (simulStreaming) {
 
           $timeout(function () {
@@ -858,18 +841,22 @@ angular.module('zmApp.controllers')
             currentStreamState = streamState.ACTIVE;
           }, 100);
         }
-      }, 20);
+      }, 20);*/
+    },
+    function (err) {
+        NVR.log ('ERROR:'+JSON.stringify(err));
+      });
     }
 
-
+    
     $scope.reorderFrame = function (item) {
       var frame = "";
       frame = item.Monitor.streamingURL + "/nph-zms?mode=single" +
         "&monitor=" + item.Monitor.Id +
         "&scale=50";
 
-      if ($rootScope.authSession != 'undefined') frame += $rootScope.authSession;
-      frame += NVR.insertBasicAuthToken();
+     frame += $rootScope.authSession;
+      frame += NVR.insertSpecialTokens();
       return frame;
     };
 
@@ -911,11 +898,13 @@ angular.module('zmApp.controllers')
       // this is to avoid packery screw ups while you are hiding/unhiding
 
       $scope.copyMontage = angular.copy($scope.MontageMonitors);
+      beforeReorderPositions = pckry.getShiftPositions('data-item-id');
+      console.log ("BEFORE REORDER="+JSON.stringify(beforeReorderPositions));
 
       if (simulStreaming) {
         NVR.debug("Killing all streams in montage to save memory/nw...");
         currentStreamState = streamState.STOPPED;
-        NVR.stopNetwork()
+        NVR.stopNetwork("",true)
           .then(function (succ) {
             for (var i = 0; i < $scope.MontageMonitors.length; i++) {
               if ($scope.MontageMonitors[i].Monitor.listDisplay == 'show') NVR.killLiveStream($scope.MontageMonitors[i].Monitor.connKey, $scope.MontageMonitors[i].Monitor.controlURL);
@@ -1044,6 +1033,7 @@ angular.module('zmApp.controllers')
       $interval.cancel(intervalHandleMontage);
       $interval.cancel(intervalHandleMontageCycle);
       $interval.cancel(intervalHandleAlarmStatus);
+      $interval.cancel(intervalHandleStreamQuery);
       $interval.cancel(intervalHandleEventStatus);
       $interval.cancel(intervalHandleReloadPage);
 
@@ -1083,10 +1073,25 @@ angular.module('zmApp.controllers')
       NVR.debug("MontageCtrl: switch minimal is " + $scope.minimal);
       // console.log("Hide Statusbar");
       ionic.Platform.fullScreen($scope.minimal, !$scope.minimal);
+
+      // hiding status bar messes up X
+      /*if ($scope.minimal) {
+        if ($rootScope.platformOS !='desktop') {
+          NVR.debug ('hiding device status bar');
+          return StatusBar.hide();
+        }
+      } else {
+        if ($rootScope.platformOS !='desktop') {
+          NVR.debug ('showing device status bar');
+          return StatusBar.show();
+        }
+      }*/
+
       //console.log ("minimal switch:Cancelling timer");
       $interval.cancel(intervalHandleMontage); //we will renew on reload
       $interval.cancel(intervalHandleMontageCycle);
       $interval.cancel(intervalHandleAlarmStatus);
+      $interval.cancel(intervalHandleStreamQuery);
       $interval.cancel(intervalHandleEventStatus);
       $interval.cancel(intervalHandleReloadPage);
 
@@ -1224,6 +1229,9 @@ angular.module('zmApp.controllers')
     function dragToggle() {
       var i;
       $scope.isDragabillyOn = !$scope.isDragabillyOn;
+      //currentStreamState  = $scope.isDragabillyOn? streamState.STOPPED:streamState.ACTIVE;
+     
+
 
       for (i = 0; i < $scope.MontageMonitors.length; i++) {
         $scope.MontageMonitors[i].Monitor.isStamp = false;
@@ -1278,17 +1286,23 @@ angular.module('zmApp.controllers')
 
     $scope.openModal = function (mid, controllable, controlid, connKey, monitor) {
 
-      currentStreamState = streamState.PAUSED;
-      $scope.isModalStreamPaused = true; // we stop montage and start modal stream in snapshot first
+      
       $timeout(function () { // after render
 
 
         if (simulStreaming) {
-          NVR.debug("Pausing all streams in montage to save memory/nw...");
 
+          var ld = NVR.getLogin();
+          if (ld.pauseStreams) {
+            currentStreamState = streamState.PAUSED;
+            $scope.isModalStreamPaused = true; // we stop montage and start modal stream in snapshot first
+            NVR.debug("Pausing all streams in montage to save memory/nw...");
+            for (var i = 0; i < $scope.MontageMonitors.length; i++) {
+              if ($scope.MontageMonitors[i].Monitor.listDisplay == 'show') NVR.pauseLiveStream($scope.MontageMonitors[i].Monitor.connKey, $scope.MontageMonitors[i].Monitor.controlURL, $scope.MontageMonitors[i].Monitor.Name);
+            }
 
-          for (var i = 0; i < $scope.MontageMonitors.length; i++) {
-            if ($scope.MontageMonitors[i].Monitor.listDisplay == 'show') NVR.pauseLiveStream($scope.MontageMonitors[i].Monitor.connKey, $scope.MontageMonitors[i].Monitor.controlURL, $scope.MontageMonitors[i].Monitor.Name);
+          } else {
+            NVR.debug ("Not pausing streams as pauseStreams is off");
           }
 
         }
@@ -1317,6 +1331,7 @@ angular.module('zmApp.controllers')
       $interval.cancel(intervalHandleMontage);
       $interval.cancel(intervalHandleMontageCycle);
       $interval.cancel(intervalHandleAlarmStatus);
+      $interval.cancel(intervalHandleStreamQuery);
       $interval.cancel(intervalHandleEventStatus);
       $interval.cancel(intervalHandleReloadPage);
 
@@ -1379,12 +1394,20 @@ angular.module('zmApp.controllers')
 
     function cleanupOnCloseModal() {
 
+      if (simulStreaming){
+        randEachTime();
+        NVR.debug ('rand each time:'+randToAvoidCacheMem);
 
+       
+
+      }
+      
       NVR.log("Restarting montage timers...");
       var ld = NVR.getLogin();
       // console.log ("closeModal: Cancelling timer");
       $interval.cancel(intervalHandleMontage);
       $interval.cancel(intervalHandleAlarmStatus);
+      $interval.cancel(intervalHandleStreamQuery);
       $interval.cancel(intervalHandleEventStatus);
       $interval.cancel(intervalHandleMontageCycle);
       $interval.cancel(intervalHandleReloadPage);
@@ -1399,6 +1422,15 @@ angular.module('zmApp.controllers')
         loadAlarmStatus();
         //  console.log ("Refreshing Image...");
       }.bind(this), zm.alarmStatusTime);
+
+      if (simulStreaming){
+       
+        intervalHandleStreamQuery = $interval(function () {
+          loadStreamQueryStatus();
+          //console.log ("Restarting Query Timer...");
+        }.bind(this), streamQueryTimer);
+
+      }
 
       loadEventStatus(ld.showMontageSidebars);
       intervalHandleEventStatus = $interval(function () {
@@ -1427,14 +1459,18 @@ angular.module('zmApp.controllers')
       // once regenerated 
       if (simulStreaming) {
 
-        NVR.debug("Resuming all stream connkeys in montage ...");
+        if (ld.pauseStreams) {
+          NVR.debug("Resuming all stream connkeys in montage ...");
 
-        for (var i = 0; i < $scope.MontageMonitors.length; i++) {
-          if ($scope.MontageMonitors[i].Monitor.listDisplay == 'show') NVR.resumeLiveStream($scope.MontageMonitors[i].Monitor.connKey, $scope.MontageMonitors[i].Monitor.controlURL, $scope.MontageMonitors[i].Monitor.Name);
+          for (var i = 0; i < $scope.MontageMonitors.length; i++) {
+            if ($scope.MontageMonitors[i].Monitor.listDisplay == 'show') NVR.resumeLiveStream($scope.MontageMonitors[i].Monitor.connKey, $scope.MontageMonitors[i].Monitor.controlURL, $scope.MontageMonitors[i].Monitor.Name);
+          }
+          currentStreamState = streamState.ACTIVE;
+        } else {
+          NVR.debug ("Not resuming streams as pauseStreams is off");
         }
-        /* NVR.regenConnKeys();
-         $scope.monitors = NVR.getMonitorsNow();
-         $scope.MontageMonitors = angular.copy($scope.monitors);*/
+        
+      
       }
 
 
@@ -1483,6 +1519,7 @@ angular.module('zmApp.controllers')
       $interval.cancel(intervalHandleMontage);
       $interval.cancel(intervalHandleMontageCycle);
       $interval.cancel(intervalHandleAlarmStatus);
+      $interval.cancel(intervalHandleStreamQuery);
       $interval.cancel(intervalHandleEventStatus);
       $interval.cancel(intervalHandleReloadPage);
       if (pckry) pckry.destroy();
@@ -1674,7 +1711,7 @@ angular.module('zmApp.controllers')
 
           // in timeout for iOS as we call stopNetwork
           $timeout(function () {
-
+            console.log ("SIMUL SWITCH MONTAGE CALLING REGEN");
             NVR.regenConnKeys();
             $scope.monitors = NVR.getMonitorsNow();
             $scope.MontageMonitors = angular.copy($scope.monitors);
@@ -1686,7 +1723,9 @@ angular.module('zmApp.controllers')
 
 
         } else {
+          console.log ("NOT SIMUL SWITCH MONTAGE CALLING REGEN");
           NVR.regenConnKeys();
+         
           $scope.monitors = NVR.getMonitorsNow();
           $scope.MontageMonitors = angular.copy($scope.monitors);
           $timeout(function () {
@@ -1879,16 +1918,33 @@ angular.module('zmApp.controllers')
     function getMode() {
 
       var mode = (simulStreaming && currentStreamState != streamState.SNAPSHOT && currentStreamState != streamState.STOPPED) ? 'jpeg' : 'single';
-    //console.log ("mode="+mode);
+      //console.log ("mode="+mode);
       return mode;
 
     }
 
     $scope.processImageError = function(monitor) {
-     // NVR.debug ("Image load error for: "+monitor.Monitor.Id+" regenerated connKey is:"+monitor.Monitor.connKey);
-      //if (1) return; // REMOVE 
-      monitor.Monitor.connKey = (Math.floor((Math.random() * 999999) + 1)).toString();
-      NVR.debug ("Image load error for: "+monitor.Monitor.Id+" regenerated connKey is:"+monitor.Monitor.connKey);
+      
+     // if (1) return;
+
+     if (currentStreamState != streamState.ACTIVE) return;
+      var mintimesec = 10;
+      var nowt = moment();
+      var thent = monitor.Monitor.regenTime || moment();
+      if (nowt.diff(thent, 'seconds') >=mintimesec) {
+        console.log ('IMAGE ERROR CALLING REGEN');
+        NVR.regenConnKeys(monitor);
+        NVR.debug ("Image load error for: "+monitor.Monitor.Id+" regenerated connKey is:"+monitor.Monitor.connKey);
+      } else {
+        dur = mintimesec - nowt.diff(thent, 'seconds');
+        NVR.debug ("Image load error for Monitor: "+monitor.Monitor.Id+" scheduling for connkey regen in "+dur+"s");
+        monitor.Monitor.regenHandle = $timeout ( function() {
+          NVR.debug ('deferred image error, calling regen');
+          //console.log ('DEFERRED IMAGE ERROR CALLING REGEN');
+          NVR.regenConnKeys(monitor);}, dur*1000 );
+      }
+
+      
     };
 
    
@@ -1902,13 +1958,13 @@ angular.module('zmApp.controllers')
         var ld = NVR.getLogin();
         var url = ld.apiurl;
         var eid = monitor.Monitor.lastEvent.events[0].Event.Id;
-        url += '/events/'+monitor.Monitor.lastEvent.events[0].Event.Id+'.json';
+        url += '/events/'+monitor.Monitor.lastEvent.events[0].Event.Id+'.json?'+$rootScope.authSession;
         var mid = monitor.Monitor.Id;
 
         ld.lastEventCheckTimes[mid] = (new moment()).tz(NVR.getTimeZoneNow()).format('YYYY-MM-DD HH:mm:ss');
         NVR.debug ("Updating monitor:"+mid+" event check time (server tz) to " + ld.lastEventCheckTimes[mid] );
         NVR.setLogin(ld);
-        monitor.Monitor.lastEvent = undefined;
+      
         
         $http.get(url)
         .then ( function (succ) {
@@ -1941,11 +1997,13 @@ angular.module('zmApp.controllers')
       });
       
             NVR.log("Cancelling montage timer, opening Modal");
+
             // NVR.log("Starting Modal timer");
             //console.log ("openModal:Cancelling timer");
             $interval.cancel(intervalHandleMontage);
             $interval.cancel(intervalHandleMontageCycle);
             $interval.cancel(intervalHandleAlarmStatus);
+            $interval.cancel(intervalHandleStreamQuery);
             $interval.cancel(intervalHandleEventStatus);
             $interval.cancel(intervalHandleReloadPage);
       
@@ -1969,6 +2027,8 @@ angular.module('zmApp.controllers')
                 $scope.modalData = {
                     doRefresh: false
                   };
+
+                  monitor.Monitor.lastEvent = undefined;
                   $ionicModal.fromTemplateUrl('templates/events-modal.html', {
                       scope: $scope, // give ModalCtrl access to this scope
                       animation: 'slide-in-up',
@@ -2013,51 +2073,117 @@ angular.module('zmApp.controllers')
 
 
           
-        if ($rootScope.authSession != 'undefined') stream += $rootScope.authSession;
+          
+        stream += $rootScope.authSession;
   
-        stream += NVR.insertBasicAuthToken();
+        stream += NVR.insertSpecialTokens();
       //  console.log (stream);
+      //console.log ("EVENT="+stream);
         return stream;
   
       };
 
+    function loadStreamQueryStatus () {
+
+      function checkValidConnkey(query,i) {
+        $http.get(query)
+        .then (function (succ) {
+          
+          //console.log ("SUCCESS="+JSON.stringify(succ.data));
+
+          if (succ.data && succ.data.result && succ.data.result == "Error") {
+          
+            $scope.MontageMonitors[i].Monitor.streamState = 'bad';
+              NVR.log ("Montage View: Regenerating Connkey as Failed:"+query);
+              $scope.MontageMonitors[i].Monitor.connKey = (Math.floor((Math.random() * 999999) + 1)).toString();
+            
+           
+          } 
+          else if (succ.data && succ.data.result && succ.data.result == "Ok"){
+            $scope.MontageMonitors[i].Monitor.streamState = 'good';
+            //console.log (JSON.stringify(succ));
+          }
+
+        }, 
+        function (err) {
+          NVR.log ("Stream Query ERR="+JSON.stringify(err));
+        });
+
+      }
+      //console.log ("MONTAGE: "+currentStreamState);
+      if (currentStreamState != streamState.ACTIVE || !simulStreaming) return;
+
+      NVR.debug ('Montage View: Stream Status check');
+      var ld = NVR.getLogin();
+      
+      var query;
+      for (var i = 0; i < $scope.MontageMonitors.length; i++) {
+        if (($scope.MontageMonitors[i].Monitor.Function == 'None') ||
+          ($scope.MontageMonitors[i].Monitor.Enabled == '0') ||
+          ($scope.MontageMonitors[i].Monitor.listDisplay == 'noshow')) {
+          continue;
+        }
+        query = ld.url+'/index.php?view=request&request=stream&command=99';
+        query= query + $rootScope.authSession;
+        query+= appendConnKey($scope.MontageMonitors[i].Monitor.connKey);
+        //if (query) query += NVR.insertSpecialTokens();
+        //console.log ("QUERY="+query);  
+        checkValidConnkey(query,i);
+
+       
+
+      }
+      
+    }
+
     $scope.constructStream = function (monitor) {
 
       var stream;
-      if (currentStreamState == streamState.STOPPED || monitor.Monitor.listDisplay == 'noshow' || $rootScope.authSession == 'undefined') {
+      var fps = NVR.getLogin().montageliveFPS;
+      if (currentStreamState == streamState.STOPPED || monitor.Monitor.listDisplay == 'noshow' ) {
         //console.log ("STREAM=empty and auth="+$rootScope.authSession);
+        //sconsole.log ('EMPTY STREAM');
         return "";
       }
 
-      //console.log ("STREAMING="+monitor.Monitor.streamingURL);
-      stream = monitor.Monitor.streamingURL +
+      if (currentStreamState == streamState.SNAPSHOT_LOWQUALITY) {
+        stream = monitor.Monitor.streamingURL +
+        "/nph-zms?mode=single&scale=10&monitor="+ monitor.Monitor.Id +  "&rand=" + randToAvoidCacheMem + monitor.Monitor.Id ;
+       // console.log(stream);
+      
+      } else {
+        stream = monitor.Monitor.streamingURL +
         "/nph-zms?mode=" + getMode() +
         "&monitor=" + monitor.Monitor.Id +
         "&scale=" + $scope.LoginData.montageQuality +
-        "&rand=" + randToAvoidCacheMem + monitor.Monitor.Id + 
-        "&buffer=1000" +
-        $rootScope.authSession +
-        appendConnKey(monitor.Monitor.connKey);
+        "&buffer="+ $scope.LoginData.liveStreamBuffer +
+        "&rand=" + randToAvoidCacheMem + monitor.Monitor.Id;
 
-      if (stream) stream += NVR.insertBasicAuthToken();
+        if (fps) {
+          stream +='&maxfps='+fps;
+        }
 
+      }
 
+        stream  += $rootScope.authSession;
+        stream += appendConnKey(monitor.Monitor.connKey);
+
+      if (stream) stream += NVR.insertSpecialTokens();
+
+      //randEachTime();
 
 
       //"&rand=" + randToAvoidCacheMem;
       //"&rand="+$scope.randToAvoidCacheMem +
 
 
-      // console.log("STREAM=" + stream);
+      //console.log("STREAM=" + stream);
       return stream;
 
     };
 
     function appendConnKey(ck) {
-      if (simulStreaming && currentStreamState != streamState.SNAPSHOT)
         return "&connkey=" + ck;
-      else
-        return "";
     }
 
 
@@ -2077,7 +2203,8 @@ angular.module('zmApp.controllers')
         monitor.Monitor.showSidebar = !monitor.Monitor.showSidebar;
         $timeout (function() {
            
-            $scope.squeezeMonitors();
+            pckry.shiftLayout();
+           // $scope.squeezeMonitors();
         }, 300);
      
     };
@@ -2097,14 +2224,15 @@ angular.module('zmApp.controllers')
         });
         $state.go(s[0],s[1],s[2]);
       });
+
+      window.addEventListener("resize", jiggleMontage, false);
      
 
       timeInMontage = new Date();
       broadcastHandles = [];
       randToAvoidCacheMem = new Date().getTime();
-      currentStreamState = streamState.SNAPSHOT;
-      // NVR.regenConnKeys();
-      $scope.monitors = NVR.getMonitorsNow();
+  
+        $scope.monitors = NVR.getMonitorsNow();
 
       //console.log ("MONITORS:"+JSON.stringify($scope.monitors));
 
@@ -2148,6 +2276,9 @@ angular.module('zmApp.controllers')
 
     //avoid bogus scale error
     $scope.LoginData = NVR.getLogin();
+
+    streamQueryTimer = (NVR.getBandwidth() == 'lowbw') ? zm.streamQueryStatusTimeLowBW: zm.streamQueryStatusTime;
+    NVR.debug ('Setting streamQuery timer to '+streamQueryTimer);
 
     $scope.toggleTimeType = function () {
       if (NVR.isTzSupported()) {
@@ -2218,6 +2349,7 @@ angular.module('zmApp.controllers')
       $interval.cancel(intervalHandleMontage);
       $interval.cancel(intervalHandleMontageCycle);
       $interval.cancel(intervalHandleAlarmStatus);
+      $interval.cancel(intervalHandleStreamQuery);
       $interval.cancel(intervalHandleEventStatus);
       $interval.cancel(intervalHandleReloadPage);
 
@@ -2237,6 +2369,15 @@ angular.module('zmApp.controllers')
         loadAlarmStatus();
         //  console.log ("Refreshing Image...");
       }.bind(this), zm.alarmStatusTime);
+
+      if (simulStreaming){
+       
+        intervalHandleStreamQuery = $interval(function () {
+          loadStreamQueryStatus();
+          //  console.log ("Refreshing Image...");
+        }.bind(this), streamQueryTimer);
+
+      }
 
       loadEventStatus(ld.showMontageSidebars);
       intervalHandleEventStatus = $interval(function () {
@@ -2329,6 +2470,7 @@ angular.module('zmApp.controllers')
    };
     $scope.$on('$ionicView.beforeLeave', function () {
 
+      window.removeEventListener("resize", jiggleMontage, false);
       currentStreamState = streamState.STOPPED;
       viewCleanup();
       viewCleaned = true;
@@ -2368,33 +2510,36 @@ angular.module('zmApp.controllers')
       }
 
       
-        pckry.reloadItems();
+    
         $timeout(function () {
-        pckry.once('layoutComplete', function () {
-          //console.log ("Layout complete");
-          var positions = pckry.getShiftPositions('data-item-id');
-          //console.log ("POSITIONS MAP " + JSON.stringify(positions));
-          var ld = NVR.getLogin();
-
-          ld.packeryPositions = JSON.stringify(positions);
-          //console.log ("Saving " + ld.packeryPositions);
-          ld.currentMontageProfile = "";
-          $scope.currentProfileName = $translate.instant('kMontage');
-          NVR.setLogin(ld);
-
-          $timeout(function () {
-            NVR.debug("doing the jiggle and dance...");
-            pckry.resize(true);
-            pckry.shiftLayout();
-            $scope.squeezeMonitors();
-          }, 600);
           
+          console.log ('******* DOING RESET');
+          pckry.once('layoutComplete', function () {
+            console.log ("Layout complete");
+            var positions = pckry.getShiftPositions('data-item-id');
+            //console.log ("POSITIONS MAP " + JSON.stringify(positions));
+            var ld = NVR.getLogin();
 
-          // $scope.slider.monsize = 2;
-        });
-        pckry.layout();
+            ld.packeryPositions = JSON.stringify(positions);
+            //console.log ("Saving " + ld.packeryPositions);
+            ld.currentMontageProfile = "";
+            $scope.currentProfileName = $translate.instant('kMontage');
+            NVR.setLogin(ld);
 
-      }, 20);
+            $timeout(function () {
+              NVR.debug("inside reset sizes:doing the jiggle and dance...");
+              //pckry.resize(true);
+              pckry.shiftLayout();
+              //$scope.squeezeMonitors();
+            }, 600);
+            
+
+            // $scope.slider.monsize = 2;
+          });
+          pckry.layout();
+        //pckry.layout();
+
+      }, 20); 
 
     };
 
@@ -2423,7 +2568,7 @@ angular.module('zmApp.controllers')
     }
 
     $scope.squeezeMonitors = function () {
-      console.log ("squeezing");
+      NVR.debug ("squeezing");
       pckry.once('layoutComplete', resizeComplete);
       $timeout(function () {
         pckry.layout();
@@ -2481,7 +2626,7 @@ angular.module('zmApp.controllers')
         var sz = elem.getAttribute("data-item-size");
         if (isNaN(sz)) sz = 20;
         oldScales[id] = sz;
-        // console.log("REMEMBERING " + id + ":" + sz);
+         //console.log("REMEMBERING " + id + ":" + sz);
 
       });
 
@@ -2528,10 +2673,13 @@ angular.module('zmApp.controllers')
         //console.log("Calling re-layout");
         //pckry.reloadItems(); 
 
-        if (dirn == 1) //expand
-        {
-          pckry.once('layoutComplete', resizeComplete);
+        pckry.once('layoutComplete', resizeComplete);
           pckry.layout();
+          
+         
+
+         
+          
 
           /* pckry.getItemElements().forEach(function (elem) {
              var id = elem.getAttribute("data-item-id");
@@ -2545,13 +2693,7 @@ angular.module('zmApp.controllers')
 
              }
            });*/
-        } else //shrink
-        {
-          //console.log("Calling shift");
-          pckry.once('layoutComplete', resizeComplete);
-          pckry.shiftLayout();
-
-        }
+     
 
       }, 150);
 
@@ -2570,6 +2712,7 @@ angular.module('zmApp.controllers')
       function resizeComplete() {
         //console.log ("HERE");
         $timeout(function () {
+         
           var positions = pckry.getShiftPositions('data-item-id');
           //console.log("SAVING");
           var ld = NVR.getLogin();

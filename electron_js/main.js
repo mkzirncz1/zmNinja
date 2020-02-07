@@ -22,6 +22,10 @@ if (argv.path) {
   console.log ("switching storage to: "+app.getPath("userData"));
 }
 
+if (argv.lang) {
+  console.log ('SET LANGUAGE TO '+argv.lang)
+  app.commandLine.appendSwitch('lang', argv.lang);
+}
 
 
 //
@@ -29,6 +33,7 @@ if (argv.path) {
 // be closed automatically when the JavaScript object is garbage collected.
 let win;
 app.commandLine.appendSwitch ('ignore-certificate-errors', 'true');
+
 
 const gotTheLock = app.requestSingleInstanceLock()
 
@@ -128,6 +133,9 @@ function createWindow() {
   });
 
   mainWindowState.manage(win);
+
+
+
   // fs will be arg 1 if its not run in electron debug mode
   if (argv.fs)
   {
@@ -141,6 +149,11 @@ function createWindow() {
        win.webContents.session.setProxy({proxyRules:argv.proxy}, function() {});
   }
 
+  if (argv.debug) {
+    // Open the DevTools.
+    win.webContents.openDevTools();
+  }
+  //win.webContents.openDevTools();
   // and load the index.html of the app.
 
   const startUrl = process.env.ELECTRON_START_URL || url.format({
@@ -246,8 +259,7 @@ if (process.platform === 'darwin') {
 const menu = Menu.buildFromTemplate(template);
 Menu.setApplicationMenu(menu);
 
-// Open the DevTools.
-//win.webContents.openDevTools();
+
 // Emitted when the window is closed.
 win.on('closed', () => {
   // Dereference the window object, usually you would store windows

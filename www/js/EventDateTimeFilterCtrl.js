@@ -27,8 +27,30 @@ angular.module('zmApp.controllers')
 
       $scope.$on('$ionicView.beforeEnter', function () {
         $scope.today = moment().format("YYYY-MM-DD");
+        $scope.monitors = NVR.getMonitorsNow();
+        if (!$scope.monitors.length) {
+          NVR.getMonitors(1)
+          .then (function (data) {
+            $scope.monitors = data;
+            for (var i=0; i < $scope.monitors.length; i++) {
+              if ($scope.monitors[i].Monitor.isChecked == undefined)
+               $scope.monitors[i].Monitor.isChecked = true;
+            }
+          });
+        }
+        else {
+          for (var i=0; i < $scope.monitors.length; i++) {
+            if ($scope.monitors[i].Monitor.isChecked == undefined)
+               $scope.monitors[i].Monitor.isChecked = true;
+          }
+        }
+        $scope.monitorsExpanded = false;
       });
 
+      $scope.toggleMonitors = function() {
+        $scope.monitorsExpanded = !$scope.monitorsExpanded;
+
+      };
       //--------------------------------------------------------------------------
       // Clears filters 
       //--------------------------------------------------------------------------
@@ -124,7 +146,36 @@ angular.module('zmApp.controllers')
           disableBack: true
         });
 
-        console.log (" >>>>>>>> BACK VIEW = "+$ionicHistory.backTitle());
+        var includeString='';
+        var excludeString='';
+        var totalUnchecked = 0;
+        var totalChecked = 0;
+
+        for (var i=0; i < $scope.monitors.length; i++) {
+          if ($scope.monitors[i].Monitor.isChecked) {
+            totalChecked += 1;
+            includeString = includeString + '/MonitorId =:'+$scope.monitors[i].Monitor.Id;
+          }
+          else {
+            totalUnchecked +=1;
+            excludeString = excludeString + '/MonitorId !=:'+$scope.monitors[i].Monitor.Id;
+          }
+        }
+        if (!totalUnchecked) {
+          $rootScope.monitorsFilter = '';
+        } else {
+          if (totalUnchecked >= totalChecked) {
+            $rootScope.monitorsFilter = includeString;
+          }
+          else {
+            $rootScope.monitorsFilter = excludeString;
+          }
+        }
+
+        
+        //console.log (">>>>>>>>>>>>> MON FILTER="+$rootScope.monitorsFilter);
+
+        //console.log (" >>>>>>>> BACK VIEW = "+$ionicHistory.backTitle());
 
         if ($ionicHistory.backTitle() == 'Timeline') {
             $ionicHistory.nextViewOptions({

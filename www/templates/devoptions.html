@@ -14,12 +14,39 @@
         <i class="ion-android-settings" style="font-size:150%"></i> {{'kDeveloperOptionsFor'|translate}}
         {{loginData.serverName}}
       </span>
-      <div class="item item-input-inset">
+      <div class="item item-input-inset item-text-wrap">
         {{'kFrameUpdate'|translate}} ({{'kSec'|translate}}.)&nbsp;
         <label class="item-input-wrapper">
           <input id="devoptions-move-3" type="tel" placeholder="min is 1s" ng-model="loginData.refreshSec">
         </label>
       </div>
+
+      <div class="item item-input-inset item-text-wrap">
+        {{'kMontageLiveViewFPS'|translate}} ({{'kSec'|translate}}.)&nbsp;
+       
+          <label class="item-input-wrapper">
+            <input  type="tel" placeholder="leave empty for auto" ng-model="loginData.montageliveFPS">
+          </label>
+        
+      </div>
+
+      <div class="item item-input-inset item-text-wrap">
+        {{'kSingleLiveViewFPS'|translate}} ({{'kSec'|translate}}.)&nbsp;
+       
+          <label class="item-input-wrapper">
+            <input id="devoptions-move-3_1" type="tel" placeholder="leave empty for auto" ng-model="loginData.singleliveFPS">
+          </label>
+        
+      </div>
+
+      <div class="item item-input-inset item-text-wrap">
+        {{'kLiveStreamBuffer'|translate}}&nbsp;      
+          <label class="item-input-wrapper">
+            <input id="devoptions-move-3_1" type="tel" ng-model="loginData.liveStreamBuffer">
+          </label>
+      </div>
+
+
       <label>
         <ion-toggle id="devoptions-move-4" ng-model="loginData.use24hr" toggle-class="toggle-calm">
           <span class="item-text-wrap">{{'kEnable24hr' | translate}}</span>
@@ -210,6 +237,22 @@
       </label>
 
       <label>
+        <ion-toggle ng-model="loginData.useAPICaching" toggle-class="toggle-calm">
+          <span class="item-text-wrap">{{'kUseAPICaching' | translate}}</span>
+        </ion-toggle>
+      </label>
+
+      <label>
+        <div class="item item-button-right">
+          {{'kObfuscation' | translate}}: {{loginData.obfuscationScheme}}<button class="button button-calm" ng-click="selectObfuscationScheme()">
+            <i class="icon ion-gear-b"></i>
+          </button>
+        </div>
+      </label>
+     
+
+
+      <label>
         <ion-toggle ng-model="loginData.enableLogs" toggle-class="toggle-calm">
           <span class="item-text-wrap">{{'kEnableLogs' | translate}}</span>
         </ion-toggle>
@@ -232,6 +275,13 @@
         {{'kCycleMontageInterval'|translate}}({{'kSec'|translate}}.)&nbsp;
         <label class="item-input-wrapper">
           <input type="tel" placeholder="" ng-model="loginData.cycleMontageInterval">
+        </label>
+      </div>
+
+      <div class="item item-text-wrap item-input-inset">
+        {{'kCustomId'|translate}}&nbsp;
+        <label class="item-input-wrapper">
+          <input type="tel" placeholder="" ng-model="loginData.zmNinjaCustomId" ng-change="useDefaultCustom()">
         </label>
       </div>
 

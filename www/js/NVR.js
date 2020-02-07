@@ -1,7 +1,7 @@
 /* jshint -W041 */
 
 /* jslint browser: true*/
-/* global cordova,StatusBar,angular,console, URI, moment, localforage, CryptoJS, Connection */
+/* global cordova,StatusBar,angular,console, URI, moment, localforage, CryptoJS, Connection, LZString */
 
 // This is my central data respository and common functions
 // that many other controllers use
@@ -12,15 +12,17 @@ angular.module('zmApp.controllers')
   .service('NVR', ['$ionicPlatform', '$http', '$q', '$ionicLoading', '$ionicBackdrop', '$fileLogger', 'zm', '$rootScope', '$ionicContentBanner', '$timeout', '$cordovaPinDialog', '$ionicPopup', '$localstorage', '$state', '$translate', '$cordovaSQLite',
     function ($ionicPlatform, $http, $q, $ionicLoading, $ionicBackdrop, $fileLogger,
       zm, $rootScope, $ionicContentBanner, $timeout, $cordovaPinDialog,
-      $ionicPopup, $localstorage, $state, $translate) {
+      $ionicPopup, $localstorage, $state, $translate, $cordovaSQLite ) {
 
       var currentServerMultiPortSupported = false;
+      var tokenExpiryTimer = null;
 
       /*
         DO NOT TOUCH zmAppVersion
         It is changed by sync_version.sh
       */
-      var zmAppVersion = "1.3.057";
+      var zmAppVersion = "1.3.088";
+     
       var isBackground = false;
       var justResumed = false;
       var timeSinceResumed = -1;
@@ -88,6 +90,10 @@ angular.module('zmApp.controllers')
           text: 'Русский',
           value: 'ru'
         },
+        {
+          text: 'Swedish',
+          value: 'se'
+        },
 
       ];
 
@@ -123,6 +129,8 @@ angular.module('zmApp.controllers')
         'eventServerInterval': '', // list of intervals for all monitors
         'refreshSec': '2', // timer value for frame change in sec 
         'refreshSecLowBW': 8,
+        'singleliveFPS':'',
+        'montageliveFPS':'',
         'enableLogs': true,
         'enableDebug': true, // if enabled with log messages with "debug"
         'usePin': false,
@@ -181,6 +189,7 @@ angular.module('zmApp.controllers')
         'momentGridSize': 40,
         'momentMonitorFilter': [],
         'enableMomentSubMenu': true,
+        'momentShowIcons':false,
         'momentArrangeBy': 'StartTime',
         'showLiveForInProgressEvents': true,
         'disableSimulStreaming': false,
@@ -192,11 +201,21 @@ angular.module('zmApp.controllers')
         'montageReviewCollapse': true,
         'objectDetectionFilter': false,
         'enableEventRefresh': true,
-        'lastEventCheckTimes':{}, 
+        'lastEventCheckTimes': {},
         'enableMontageOverlays': true,
-        'showMontageSidebars': false
-      
-
+        'showMontageSidebars': false,
+        'isTokenSupported': false,
+        'accessTokenExpires': '',
+        'refreshTokenExpires': '',
+        'accessToken': '',
+        'refreshToken': '',
+        'isKiosk': false,
+        'kioskPassword': '',
+        'useAPICaching': true,
+        'pauseStreams': false,
+        'liveStreamBuffer': 10,
+        'zmNinjaCustomId':undefined, // filled in init. custom header
+        'obfuscationScheme': 'lzs' // or 'aes'
 
       };
 
@@ -219,6 +238,10 @@ angular.module('zmApp.controllers')
           debug("Cordova HTTP: configuring basic auth");
           cordova.plugin.http.useBasicAuth(loginData.basicAuthUser, loginData.basicAuthPassword);
         }
+        debug ("Setting cordova header X-ZmNinja to "+loginData.zmNinjaCustomId);
+        // setup custom header
+        cordova.plugin.http.setHeader('*', 'X-ZmNinja', loginData.zmNinjaCustomId);
+
 
         if (!loginData.enableStrictSSL) {
 
@@ -227,7 +250,7 @@ angular.module('zmApp.controllers')
           cordova.plugin.http.setSSLCertMode('nocheck', function () {
             debug('--> SSL is permissive, will allow any certs. Use at your own risk.');
           }, function () {
-            console.log('-->Error setting SSL permissive');
+            NVR.log('-->Error setting SSL permissive');
           });
 
           if ($rootScope.platformOS == 'android') {
@@ -311,10 +334,15 @@ angular.module('zmApp.controllers')
           if (val !== undefined) {
             var regex1 = /"password":".*?"/g;
             var regex2 = /&pass=.*?(?=["&]|$)/g;
+            var regex3 = /&token=([^&]*)/g;
+            var regex4 = /&auth=([^&]*)/g;
+
 
             //console.log ("VAL IS " + val);
             val = val.replace(regex1, "<password removed>");
             val = val.replace(regex2, "<password removed>");
+            val = val.replace (regex3, "&token=<removed>");
+            val = val.replace (regex4, "&auth=<removed>");
           }
 
           $ionicPlatform.ready(function () {
@@ -325,15 +353,116 @@ angular.module('zmApp.controllers')
       }
 
 
+      // custom caching function
+      // as native http doesn't cache
 
+      function delete_cache (key) {
+        return localforage.removeItem(key);
+      }
+
+      function delete_all_caches() {
+        debug ('CACHE: Flushing all network API caches...');
+        return localforage.removeItem('cached_monitors')
+        .then ( function () {return localforage.removeItem('cached_api_version');})
+        .then ( function () {return localforage.removeItem('cached_multi_servers');})
+        .then ( function () {return localforage.removeItem('cached_multi_port');})
+        .then ( function () {return localforage.removeItem('cached_timezone');})
+        .catch ( function (err) {debug ('Error removing all caches: '+JSON.stringify(err));});
+      }
+
+      function cache_or_http(url,key,doCrypt, expiry) {
+
+      
+        if (!loginData.useAPICaching) {
+          debug ('CACHE: Not being used, as it is disabled');
+          return $http.get(url);
+        }
+      
+       // debug ('Inside cache_or_http with key:'+key+' crypt:'+doCrypt+'  exp:'+expiry);
+        var d = $q.defer();
+        
+        if (!expiry) expiry = 3600;
+        if (!doCrypt) doCrypt = false;
+
+        localforage.getItem(key)
+        .then (function (cache_data) {
+            if (cache_data) {
+              debug ('CACHE: found for key: '+key+' with expiry of:'+cache_data.expiry+'s');
+
+              data = cache_data.data;
+              t = moment(cache_data.time);
+              diff = moment().diff(t,'seconds');
+              
+              if (diff >=cache_data.expiry) {
+                debug ('CACHE: cached value for key:'+key+' has expired as '+diff+' >='+cache_data.expiry);
+                localforage.removeItem (key)
+                .then (function() {return cache_or_http(url, key, doCrypt, expiry);})
+                .catch (function(err) {
+                  debug ('CACHE: error deleting key, err:'+JSON.stringify(err)+' but still proceeding with another call to cache_or_http');
+                  return cache_or_http(url, key, doCrypt, expiry);
+                });
+              }
+              else {
+                debug ('CACHE: cached value for key:'+key+' is good as '+diff+' <'+cache_data.expiry);
+              }
+
+              //data = JSON.parse(data);
+              if (doCrypt) {
+                debug ('CACHE: decryption requested');
+                data = decrypt(data);
+              }
+              else
+                data = JSON.parse(data);
+              
+              d.resolve(data);
+              return (d.promise);
+            } else {
+              debug ('CACHE: NOT found for:'+key+ ' reverting to HTTP');
+              return $http.get(url)
+              .then ( function (data) {
+                cache_entry = {
+                  'data': null,
+                  'time': null,
+                  'expiry': expiry
+                };
+                debug ('CACHE: storing key data in cache now, with expiry of '+expiry);
+                if (doCrypt) {
+                  debug ('CACHE: encrypting request');
+                  var ct = encrypt(data);
+                  cache_entry.data = ct;
+                }
+                else {
+                  cache_entry.data = JSON.stringify(data);
+                }
+                cache_entry.time = moment().toString();
+                //debug ('Setting key:'+key+' data value to:'+cache_entry.data);
+                localforage.setItem(key, cache_entry);
+                d.resolve(data);
+                return d.promise;
+              })
+              .catch ( function (err) {
+                log ('CACHE: error with http get '+err);
+                d.reject(err);
+                return d.promise;
+              });
+            }
+            
+        })
+        .catch ( function (err) {
+          debug ('cache_or_http error:'+err);
+          return $http.get(url);
+        }) ;
+        debug ('returning promise');
+        return d.promise;
+      }
 
       function getZmsMultiPortSupport(forceReload) {
         var d = $q.defer();
         if (configParams.ZM_MIN_STREAMING_PORT == -1 || forceReload) {
           log("Checking value of ZM_MIN_STREAMING_PORT for the first time");
           var apiurl = loginData.apiurl;
-          var myurl = apiurl + '/configs/viewByName/ZM_MIN_STREAMING_PORT.json';
-          $http.get(myurl)
+          var myurl = apiurl + '/configs/viewByName/ZM_MIN_STREAMING_PORT.json?' + $rootScope.authSession;
+          cache_or_http(myurl,'cached_multi_port', false, 3600*24)
             .then(function (data) {
                 data = data.data;
                 //console.log ("GOT " + JSON.stringify(data));
@@ -360,7 +489,7 @@ angular.module('zmApp.controllers')
                 return (d.promise);
               });
         } else {
-          log("sending Cached ZM_MIN_STREAMING_PORT " +
+          log("sending stored ZM_MIN_STREAMING_PORT " +
             configParams.ZM_MIN_STREAMING_PORT);
           d.resolve(configParams.ZM_MIN_STREAMING_PORT);
           return (d.promise);
@@ -370,6 +499,341 @@ angular.module('zmApp.controllers')
 
       }
 
+      function proceedWithFreshLogin(noBroadcast) {
+
+     
+        // recompute rand anyway so even if you don't have auth
+        // your stream should not get frozen
+        $rootScope.rand = Math.floor((Math.random() * 100000) + 1);
+        $rootScope.modalRand = Math.floor((Math.random() * 100000) + 1);
+  
+        // console.log ("***** STATENAME IS " + statename);
+  
+        var d = $q.defer();
+              log("Doing fresh login to ZM");
+        var httpDelay = loginData.enableSlowLoading ? zm.largeHttpTimeout : zm.httpTimeout;
+  
+      
+        str =  "<a style='color:white; text-decoration:none' href='#' ng-click='$root.cancelAuth()' <i class='ion-close-circled'></i>&nbsp;" + $translate.instant('kAuthenticating')+"</a>";
+        
+       
+  
+        if (str) {
+          $ionicLoading.show({
+            template: str,
+            noBackdrop: true,
+            duration: httpDelay
+          });
+        }
+  
+  
+        //first login using new API
+        $rootScope.authSession = '';
+        var loginAPI = loginData.apiurl + '/host/login.json';
+      
+  
+        $http({
+            method: 'post',
+            url: loginAPI,
+            timeout: httpDelay,
+            skipIntercept: true,
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            responseType: 'text',
+            transformResponse: undefined,
+            transformRequest: function (obj) {
+              var str = [];
+              for (var p in obj)
+                str.push(encodeURIComponent(p) + "=" + encodeURIComponent(obj[p]));
+              return str.join("&");
+            },
+            data: {
+              user: loginData.username,
+              pass: loginData.password
+            }
+          })
+          //$http.get(loginAPI)
+          .then(function (textsucc) {
+  
+              $ionicLoading.hide();
+              var succ;
+              try {
+  
+                succ = JSON.parse(textsucc.data);
+  
+                if (!succ.version) {
+                  debug("API login returned fake success, going back to webscrape");
+                  
+                  loginData.loginAPISupported = false;
+                  setLogin(loginData);
+  
+                  loginWebScrape()
+                    .then(function () {
+                        d.resolve("Login Success");
+                        return d.promise;
+                      },
+                      function () {
+                        $ionicLoading.hide();
+                        d.reject("Login Error");
+                        return (d.promise);
+                      });
+                  return d.promise;
+                }
+                debug("API based login returned. ");
+                console.log (JSON.stringify(succ));
+                setCurrentServerVersion(succ.version);
+                $ionicLoading.hide();
+                //$rootScope.loggedIntoZm = 1;
+                //console.log ("***** CLEARING AUTHSESSION IN LINE 466");
+                $rootScope.authSession = '';
+  
+                if (succ.refresh_token) {
+                  $rootScope.authSession = '&token='+succ.access_token;
+                  log ("New refresh token retrieved: ..."+succ.refresh_token.substr(-5));
+                  loginData.isTokenSupported = true;
+              
+                  loginData.accessToken = succ.access_token;
+                  loginData.accessTokenExpires = moment.utc().add(succ.access_token_expires, 'seconds');
+                  loginData.refreshToken = succ.refresh_token;
+                  $rootScope.tokenExpires = succ.access_token_expires;
+
+                  log ('----> Setting token re-login after '+succ.access_token_expires+' seconds');
+                  if (tokenExpiryTimer) $timeout.cancel(tokenExpiryTimer);
+                  //succ.access_token_expires = 30;
+                  tokenExpiryTimer = $timeout ( function () {
+                    $rootScope.$broadcast('token-expiry');
+                  }, succ.access_token_expires * 1000);
+                  
+                
+                  loginData.refreshTokenExpires = moment.utc().add(succ.refresh_token_expires, 'seconds');
+              
+                  log ("Current time is: UTC "+moment.utc().format("YYYY-MM-DD hh:mm:ss"));
+                  log ("New refresh token expires on: UTC "+loginData.refreshTokenExpires.format("YYYY-MM-DD hh:mm:ss"));
+                  log ("New access token expires on: UTC "+loginData.accessTokenExpires.format("YYYY-MM-DD hh:mm:ss"));
+                  setLogin(loginData);
+  
+                }
+                else {
+                  if (succ.credentials != undefined) {
+                    if (succ.credentials != '') {
+                      log ("Could not recover token details, trying old auth credentials");
+                      loginData.isTokenSupported = false;
+                      setLogin(loginData);
+                      $rootScope.authSession = "&" + succ.credentials;
+                      if (succ.append_password == '1') {
+                        $rootScope.authSession = $rootScope.authSession +
+                          loginData.password;
+                      }
+                    } else {
+                      // incase auth is turned off, but user said
+                    // its on. 
+                      $rootScope.authSession="&nonauth=none";
+                      debug ('Your auth seems to be turned off, but you said yes');
+                      
+                    }
+                    
+                  }
+                  else {
+                    log ("Neither token nor old cred worked. Seems like an error");
+                  }
+                }
+                
+  
+                
+                loginData.loginAPISupported = true;
+                setLogin(loginData);
+  
+
+                log("Stream authentication construction: " +
+                  $rootScope.authSession);
+  
+                log("Successfully logged into Zoneminder via API");
+  
+  
+  
+                d.resolve("Login Success");
+                if (!noBroadcast) $rootScope.$broadcast('auth-success', succ);
+                return d.promise;
+  
+              } catch (e) {
+                debug("Login API approach did not work...");
+              
+               
+                loginData.loginAPISupported = false;
+                loginData.isTokenSupported = false;
+                setLogin(loginData);
+                loginWebScrape()
+                  .then(function () {
+                      d.resolve("Login Success");
+                      return d.promise;
+                    },
+                    function (err) {
+                      $ionicLoading.hide();
+                      d.reject("Login Error");
+                      return (d.promise);
+                    });
+                return d.promise;
+  
+              }
+
+            },
+            function (err) {
+              //console.log("******************* API login error " + JSON.stringify(err));
+              $ionicLoading.hide();
+              //if (err  && err.data && 'success' in err.data) {
+              log("API based login not supported, need to use web scraping...");
+              // login using old web scraping
+              
+              loginData.loginAPISupported = false;
+              setLogin(loginData);
+               loginWebScrape()
+                .then(function () {
+                    d.resolve("Login Success");
+                    return d.promise;
+                  },
+                  function (err) {
+                    d.reject("Login Error");
+                    return (d.promise);
+                  });
+  
+            }
+          ); // post .then
+  
+        return d.promise;
+        
+      }
+
+    function loginWebScrape(noBroadcast) {
+     
+      var d = $q.defer();
+      if ($rootScope.userCancelledAuth) {
+        debug ('NVR loginWebScrape: User cancelled auth, not proceeding');
+        d.reject(true);
+        return d.promise;
+      }
+      debug("Logging in using old web-scrape method");
+
+      $ionicLoading.show({
+       
+        template: "<a style='color:white; text-decoration:none' href='#' ng-click='$root.cancelAuth()' <i class='ion-close-circled'></i>&nbsp;" + $translate.instant('kAuthenticatingWebScrape')+"</a>",
+        noBackdrop: true,
+        duration: httpDelay
+      });
+
+
+      
+         
+
+      var httpDelay = loginData.enableSlowLoading ? zm.largeHttpTimeout : zm.httpTimeout;
+      //NVR.debug ("*** AUTH LOGIN URL IS " + loginData.url);
+      $http({
+
+          method: 'post',
+          timeout: httpDelay,
+          //withCredentials: true,
+          url: loginData.url + '/index.php?view=console',
+          skipIntercept:true,
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json',
+          },
+          transformRequest: function (obj) {
+            var str = [];
+            for (var p in obj)
+              str.push(encodeURIComponent(p) + "=" +
+                encodeURIComponent(obj[p]));
+            var params = str.join("&");
+            return params;
+          },
+
+          data: {
+            username: loginData.username,
+            password: loginData.password,
+            action: "login",
+            view: "console"
+          }
+        })
+        .then(function (data, status, headers) {
+            // console.log(">>>>>>>>>>>>>> PARALLEL POST SUCCESS");
+            data = data.data;
+            $ionicLoading.hide();
+
+            // Coming here does not mean success
+            // it could also be a bad login, but
+            // ZM returns you to login.php and returns 200 OK
+            // so we will check if the data has
+            // <title>ZM - Login</title> -- it it does then its the login page
+
+            if (data.indexOf(zm.loginScreenString1) >=0) {
+              //eventServer.start();
+              //$rootScope.loggedIntoZm = 1;
+
+              log("zmAutologin successfully logged into Zoneminder");
+              $rootScope.apiValid = true;
+
+              // now go to authKey part, so don't return yet...
+
+            } else //  this means login error
+            {
+              // $rootScope.loggedIntoZm = -1;
+              //console.log("**** ZM Login FAILED");
+              log("zmAutologin Error: Bad Credentials ", "error");
+              if (!noBroadcast) $rootScope.$broadcast('auth-error', "incorrect credentials");
+
+              d.reject("Login Error");
+              return (d.promise);
+              // no need to go to next code, so return above
+            }
+
+            // Now go ahead and re-get auth key 
+            // if login was a success
+           // console.log ("***** CLEARING AUTHSESSION IN AUTHKEY");
+            $rootScope.authSession = '';
+            getAuthKey($rootScope.validMonitorId)
+              .then(function (success) {
+
+                  //console.log(success);
+                  //console.log ("***** SETTING AUTHSESSION IN AUTHKEY"+success);
+                  $rootScope.authSession = success;
+                  log("Stream authentication construction: " +
+                    $rootScope.authSession);
+                  d.resolve("Login Success");
+                  $rootScope.$broadcast('auth-success', data);
+                  return d.promise;
+
+                },
+                function (error) {
+                  //console.log(error);
+
+                  log("Modal: Error returned Stream authentication construction. Retaining old value of: " + $rootScope.authSession);
+                  debug("Error was: " + JSON.stringify(error));
+                  d.resolve("Login Success");
+                  if (!noBroadcast) $rootScope.$broadcast('auth-success', data);
+                });
+
+            return (d.promise);
+
+          },
+          function (error, status) {
+
+            // console.log(">>>>>>>>>>>>>> PARALLEL POST ERROR");
+            $ionicLoading.hide();
+
+            //console.log("**** ZM Login FAILED");
+
+            // FIXME: Is this sometimes results in null
+
+            log("zmAutologin Error " + JSON.stringify(error) + " and status " + status);
+            // bad urls etc come here
+            //$rootScope.loggedIntoZm = -1;
+            if (!noBroadcast) $rootScope.$broadcast('auth-error', error);
+
+            d.reject("Login Error");
+            return d.promise;
+          });
+      return d.promise;
+    }
 
       function getAuthKey(mid, ck) {
 
@@ -382,33 +846,50 @@ angular.module('zmApp.controllers')
           return d.promise;
         }
 
+        if ($rootScope.authSession != '' && $rootScope.authSession != 'undefined') {
+          log("We already have an auth key of:" + $rootScope.authSession);
+          d.resolve($rootScope.authSession);
+          return d.promise;
+        }
+
         if (loginData.currentServerVersion && (versionCompare(loginData.currentServerVersion, zm.versionWithLoginAPI) != -1 || loginData.loginAPISupported)) {
 
-          myurl = loginData.apiurl + '/host/getCredentials.json';
-          debug("Server version " + loginData.currentServerVersion + " > 1.31.41, so using getCredentials API:" + myurl);
+          myurl = loginData.apiurl + '/host/login.json';
+          debug("Server version " + loginData.currentServerVersion + " > 1.31.41, so using login API:" + myurl);
           $http.get(myurl)
             .then(function (s) {
 
                 debug("Credentials API returned: " + JSON.stringify(s));
-                if (!s.data || !s.data.credentials) {
-                  $rootScope.authSession = "undefined";
+                if (!s.data || s.data.credentials == undefined) {
+                  $rootScope.authSession = "";
                   d.resolve($rootScope.authSession);
-                  debug("getCredentials() API Succeded, but did NOT return credentials key: " + JSON.stringify(s));
+                  debug("login() API Succeded, but did NOT return credentials key: " + JSON.stringify(s));
                   return d.promise;
 
                 } else {
-                  $rootScope.authSession = "&" + s.data.credentials;
-                  if (s.data.append_password == '1') {
-                    $rootScope.authSession = $rootScope.authSession +
-                      loginData.password;
+                  if (s.data.credentials != '') {
+                    $rootScope.authSession = "&" + s.data.credentials;
+                    if (s.data.append_password == '1') {
+                      $rootScope.authSession = $rootScope.authSession +
+                        loginData.password;
+                    }
                   }
+                  else {
+                    // incase auth is turned off, but user said
+                    // its on. 
+                    $rootScope.authSession="&nonauth=none";
+                    debug ('Your auth seems to be turned off, but you said yes');
+                  }
+                  
                   d.resolve($rootScope.authSession);
                   return d.promise;
                 }
 
               },
               function (e) {
-                $rootScope.authSession = "undefined";
+
+                //console.log ("***** CLEARING AUTHSESSION IN GETCREDENTIALS");
+                $rootScope.authSession = "";
                 d.resolve($rootScope.authSession);
                 debug("AuthHash API Error: " + JSON.stringify(e));
                 return d.promise;
@@ -428,7 +909,7 @@ angular.module('zmApp.controllers')
 
         if (!mid) {
           log("Deferring auth key, as monitorId unknown");
-          d.resolve("undefined");
+          d.resolve("");
           $rootScope.authSession = as;
           return (d.promise);
         }
@@ -469,7 +950,7 @@ angular.module('zmApp.controllers')
             },
             function (error) {
               log("NVR: Error resolving auth key " + JSON.stringify(error));
-              d.resolve("undefined");
+              d.resolve("");
               return (d.promise);
             });
         return (d.promise);
@@ -483,10 +964,15 @@ angular.module('zmApp.controllers')
           if (val !== undefined) {
             var regex1 = /"password":".*?"/g;
             var regex2 = /&pass=.*?(?=["&]|$)/g;
+            var regex3 = /&token=([^&]*)/g;
+            var regex4 = /&auth=([^&]*)/g;
+
 
             //console.log ("VAL IS " + val);
             val = val.replace(regex1, "<password removed>");
             val = val.replace(regex2, "<password removed>");
+            val = val.replace (regex3, "&token=<removed>");
+            val = val.replace (regex4, "&auth=<removed>");
 
           }
           // make sure password is removed
@@ -510,11 +996,10 @@ angular.module('zmApp.controllers')
 
           try {
             positions = JSON.parse(positionsStr);
+          } catch (e) {
+            debug("error parsing positions");
           }
-          catch (e) {
-              debug ("error parsing positions");
-          }
-          
+
           for (var m = 0; m < monitors.length; m++) {
             var positionFound = false;
             for (var p = 0; p < positions.length; p++) {
@@ -550,6 +1035,7 @@ angular.module('zmApp.controllers')
 
 
         }
+       
       }
 
       function setLogin(newLogin) {
@@ -559,10 +1045,13 @@ angular.module('zmApp.controllers')
 
 
         loginData = angular.copy(newLogin);
+       // console.log ('****** SET LOGIN:'+JSON.stringify(loginData));
+        $rootScope.LoginData = loginData;
+
         serverGroupList[loginData.serverName] = angular.copy(loginData);
 
-        var ct = CryptoJS.AES.encrypt(JSON.stringify(serverGroupList), zm.cipherKey).toString();
-
+        var ct = encrypt(serverGroupList);
+      
         //debug ("Crypto is: " + ct);
 
         return localforage.setItem("serverGroupList", ct)
@@ -607,465 +1096,562 @@ angular.module('zmApp.controllers')
       }
 
       function _checkInitSanity(loginData) {
-           // old version hacks for new variables
-
-                  // always true Oct 27 2016
-                  loginData.persistMontageOrder = true;
-                  loginData.enableh264 = true;
-
-                  if (typeof loginData.isUseBasicAuth === 'undefined') {
-                    loginData.isUseBasicAuth = false;
-                    loginData.basicAuthUser = '';
-                    loginData.basicAuthPassword = '';
-                    $rootScope.basicAuthHeader = '';
-                    $rootScope.basicAuthToken = '';
-                  }
-
-                  if (loginData.url.indexOf('@') != -1) {
-                    log(">> " + loginData.url);
-                    log(">>User/Password detected in URL, changing to new auth handling...");
-                    loginData.isUseBasicAuth = true;
-
-                    var components = URI.parse(loginData.url);
-                    loginData.url = components.scheme + "://" + components.host;
-                    if (components.port) loginData.url = loginData.url + ":" + components.port;
-                    if (components.path) loginData.url = loginData.url + components.path;
-
-                    components = URI.parse(loginData.streamingurl);
-                    loginData.streamingurl = components.scheme + "://" + components.host;
-                    if (components.port) loginData.streamingurl = loginData.streamingurl + ":" + components.port;
-                    if (components.path) loginData.streamingurl = loginData.streamingurl + components.path;
-
-
-                    components = URI.parse(loginData.apiurl);
-                    loginData.apiurl = components.scheme + "://" + components.host;
-                    if (components.port) loginData.apiurl = loginData.apiurl + ":" + components.port;
-                    if (components.path) loginData.apiurl = loginData.apiurl + components.path;
-
-                    $rootScope.basicAuthToken = btoa(components.userinfo);
-                    $rootScope.basicAuthHeader = 'Basic ' + $rootScope.basicAuthToken;
-                    //console.log (">>>> SET BASIC AUTH TO  " + $rootScope.basicAuthHeader);
-
-                    var up = components.userinfo.split(':');
-                    loginData.basicAuthPassword = up[1];
-                    loginData.basicAuthUser = up[0];
-                    //console.log ("SETTING "+loginData.basicAuthUser+" "+loginData.basicAuthPassword);
+        // old version hacks for new variables
+
+        // always true Oct 27 2016
+        loginData.persistMontageOrder = true;
+        loginData.enableh264 = true;
+
+        if (typeof loginData.isUseBasicAuth === 'undefined') {
+          loginData.isUseBasicAuth = false;
+          loginData.basicAuthUser = '';
+          loginData.basicAuthPassword = '';
+          $rootScope.basicAuthHeader = '';
+          $rootScope.basicAuthToken = '';
+        }
+
+        if (loginData.url.indexOf('@') != -1) {
+          log(">> " + loginData.url);
+          log(">>User/Password detected in URL, changing to new auth handling...");
+          loginData.isUseBasicAuth = true;
+
+          var components = URI.parse(loginData.url);
+          loginData.url = components.scheme + "://" + components.host;
+          if (components.port) loginData.url = loginData.url + ":" + components.port;
+          if (components.path) loginData.url = loginData.url + components.path;
+
+          components = URI.parse(loginData.streamingurl);
+          loginData.streamingurl = components.scheme + "://" + components.host;
+          if (components.port) loginData.streamingurl = loginData.streamingurl + ":" + components.port;
+          if (components.path) loginData.streamingurl = loginData.streamingurl + components.path;
+
+
+          components = URI.parse(loginData.apiurl);
+          loginData.apiurl = components.scheme + "://" + components.host;
+          if (components.port) loginData.apiurl = loginData.apiurl + ":" + components.port;
+          if (components.path) loginData.apiurl = loginData.apiurl + components.path;
+
+          $rootScope.basicAuthToken = btoa(components.userinfo);
+          $rootScope.basicAuthHeader = 'Basic ' + $rootScope.basicAuthToken;
+          //console.log (">>>> SET BASIC AUTH TO  " + $rootScope.basicAuthHeader);
+
+          var up = components.userinfo.split(':');
+          loginData.basicAuthPassword = up[1];
+          loginData.basicAuthUser = up[0];
+          //console.log ("SETTING "+loginData.basicAuthUser+" "+loginData.basicAuthPassword);
 
-                  }
-
-                  if (loginData.isUseBasicAuth) {
-                    $rootScope.basicAuthToken = btoa(loginData.basicAuthUser + ':' + loginData.basicAuthPassword);
-                    $rootScope.basicAuthHeader = 'Basic ' + $rootScope.basicAuthToken;
-                    debug("Basic authentication detected, constructing Authorization Header");
+        }
+
+        if (loginData.isUseBasicAuth) {
+          $rootScope.basicAuthToken = btoa(loginData.basicAuthUser + ':' + loginData.basicAuthPassword);
+          $rootScope.basicAuthHeader = 'Basic ' + $rootScope.basicAuthToken;
+          debug("Basic authentication detected, constructing Authorization Header");
 
-                    // console.log ("BASIC AUTH SET TO:"+$rootScope.basicAuthHeader);
+          // console.log ("BASIC AUTH SET TO:"+$rootScope.basicAuthHeader);
 
-                  }
+        }
 
 
-                  if (typeof loginData.enableAlarmCount === 'undefined') {
-                    debug("enableAlarmCount does not exist, setting to true");
-                    loginData.enableAlarmCount = true;
-                  }
+        if (typeof loginData.enableAlarmCount === 'undefined') {
+          debug("enableAlarmCount does not exist, setting to true");
+          loginData.enableAlarmCount = true;
+        }
 
-                  if (typeof loginData.onTapScreen == 'undefined') {
-                    loginData.onTapScreen = $translate.instant('kTapMontage');
-                  }
+        if (typeof loginData.onTapScreen == 'undefined') {
+          loginData.onTapScreen = $translate.instant('kTapMontage');
+        }
 
-                  if (loginData.onTapScreen != $translate.instant('kTapMontage') &&
-                    loginData.onTapScreen != $translate.instant('kTapEvents') &&
-                    loginData.onTapScreen != $translate.instant('kTapLiveMonitor')) {
-                    log("Invalid onTap setting found, resetting. I got " + loginData.onTapScreen);
-                    loginData.onTapScreen = $translate.instant('kMontage');
-                  }
+        if (loginData.onTapScreen != $translate.instant('kTapMontage') &&
+          loginData.onTapScreen != $translate.instant('kTapEvents') &&
+          loginData.onTapScreen != $translate.instant('kTapLiveMonitor')) {
+          log("Invalid onTap setting found, resetting. I got " + loginData.onTapScreen);
+          loginData.onTapScreen = $translate.instant('kMontage');
+        }
 
-                  if (typeof loginData.minAlarmCount === 'undefined') {
-                    debug("minAlarmCount does not exist, setting to true");
-                    loginData.minAlarmCount = 1;
-                  }
+        if (typeof loginData.minAlarmCount === 'undefined') {
+          debug("minAlarmCount does not exist, setting to true");
+          loginData.minAlarmCount = 1;
+        }
 
-                  if (typeof loginData.montageSize == 'undefined') {
-                    debug("montageSize does not exist, setting to 2 (2 per col)");
-                    loginData.montageSize = 2;
-                  }
+        if (typeof loginData.montageSize == 'undefined') {
+          debug("montageSize does not exist, setting to 2 (2 per col)");
+          loginData.montageSize = 2;
+        }
 
-                  if (typeof loginData.useNphZms == 'undefined') {
-                    debug("useNphZms does not exist. Setting to true");
-                    loginData.useNphZms = true;
-                  }
+        if (typeof loginData.useNphZms == 'undefined') {
+          debug("useNphZms does not exist. Setting to true");
+          loginData.useNphZms = true;
+        }
 
-                  if (typeof loginData.useNphZmsForEvents == 'undefined') {
-                    debug("useNphZmsForEvents does not exist. Setting to true");
-                    loginData.useNphZmsForEvents = true;
-                  }
+        if (typeof loginData.useNphZmsForEvents == 'undefined') {
+          debug("useNphZmsForEvents does not exist. Setting to true");
+          loginData.useNphZmsForEvents = true;
+        }
 
-                  if (typeof loginData.forceImageModePath == 'undefined') {
-                    debug("forceImageModePath does not exist. Setting to false");
-                    loginData.forceImageModePath = false;
-                  }
+        if (typeof loginData.forceImageModePath == 'undefined') {
+          debug("forceImageModePath does not exist. Setting to false");
+          loginData.forceImageModePath = false;
+        }
 
-                  if (typeof loginData.reachability == 'undefined') {
-                    debug("reachability does not exist. Setting to true");
-                    loginData.reachability = true;
-                  }
+        if (typeof loginData.reachability == 'undefined') {
+          debug("reachability does not exist. Setting to true");
+          loginData.reachability = true;
+        }
 
 
-                  // force it - this may not be the problem
-                  loginData.reachability = true;
+        // force it - this may not be the problem
+        loginData.reachability = true;
 
-                  // and now, force enable it
-                  loginData.useNphZms = true;
-                  loginData.useNphZmsForEvents = true;
+        // and now, force enable it
+        loginData.useNphZms = true;
+        loginData.useNphZmsForEvents = true;
 
-                  if (typeof loginData.packMontage == 'undefined') {
-                    debug("packMontage does not exist. Setting to false");
-                    loginData.packMontage = false;
-                  }
+        if (typeof loginData.packMontage == 'undefined') {
+          debug("packMontage does not exist. Setting to false");
+          loginData.packMontage = false;
+        }
 
-                  if (typeof loginData.forceNetworkStop == 'undefined') {
-                    debug("forceNetwork does not exist. Setting to false");
-                    loginData.forceNetworkStop = false;
-                  }
+        if (typeof loginData.forceNetworkStop == 'undefined') {
+          debug("forceNetwork does not exist. Setting to false");
+          loginData.forceNetworkStop = false;
+        }
 
-                  if (typeof loginData.enableLogs == 'undefined') {
-                    debug("enableLogs does not exist. Setting to true");
-                    loginData.enableLogs = true;
-                  }
+        if (typeof loginData.enableLogs == 'undefined') {
+          debug("enableLogs does not exist. Setting to true");
+          loginData.enableLogs = true;
+        }
 
-                  if (typeof loginData.defaultPushSound == 'undefined') {
-                    debug("defaultPushSound does not exist. Setting to false");
-                    loginData.defaultPushSound = false;
-                  }
+        if (typeof loginData.defaultPushSound == 'undefined') {
+          debug("defaultPushSound does not exist. Setting to false");
+          loginData.defaultPushSound = false;
+        }
 
 
-                  //console.log("INIT SIMUL=" + loginData.disableSimulStreaming);
-                  //console.log("INIT PLATFORM IS=" + $rootScope.platformOS);
-                  if (typeof loginData.disableSimulStreaming == 'undefined') {
+        //console.log("INIT SIMUL=" + loginData.disableSimulStreaming);
+        //console.log("INIT PLATFORM IS=" + $rootScope.platformOS);
+        if (typeof loginData.disableSimulStreaming == 'undefined') {
 
 
-                    loginData.disableSimulStreaming = false;
-                    //console.log("INIT DISABLING SIMUL:" + loginData.disableSimulStreaming);
-                  }
+          loginData.disableSimulStreaming = false;
+          //console.log("INIT DISABLING SIMUL:" + loginData.disableSimulStreaming);
+        }
 
 
-                  if (typeof loginData.exitOnSleep == 'undefined') {
-                    debug("exitOnSleep does not exist. Setting to false");
-                    loginData.exitOnSleep = false;
-                  }
+        if (typeof loginData.exitOnSleep == 'undefined') {
+          debug("exitOnSleep does not exist. Setting to false");
+          loginData.exitOnSleep = false;
+        }
 
-                  if (typeof loginData.enableBlog == 'undefined') {
-                    debug("enableBlog does not exist. Setting to true");
-                    loginData.enableBlog = true;
+        if (typeof loginData.enableBlog == 'undefined') {
+          debug("enableBlog does not exist. Setting to true");
+          loginData.enableBlog = true;
 
-                  }
+        }
 
-                  if (typeof loginData.packeryPositionsArray == 'undefined') {
-                    debug("packeryPositionsArray does not exist. Setting to empty");
-                    loginData.packeryPositionsArray = {};
+        if (typeof loginData.packeryPositionsArray == 'undefined') {
+          debug("packeryPositionsArray does not exist. Setting to empty");
+          loginData.packeryPositionsArray = {};
 
-                  }
+        }
 
 
-                  if (typeof loginData.packeryPositions == 'undefined') {
-                    debug("packeryPositions does not exist. Setting to empty");
-                    loginData.packeryPositions = "";
+        if (typeof loginData.packeryPositions == 'undefined') {
+          debug("packeryPositions does not exist. Setting to empty");
+          loginData.packeryPositions = "";
 
-                  }
+        }
 
-                  if (typeof loginData.EHpackeryPositions == 'undefined') {
-                    debug("EHpackeryPositions does not exist. Setting to empty");
-                    loginData.EHpackeryPositions = "";
+        if (typeof loginData.EHpackeryPositions == 'undefined') {
+          //debug("EHpackeryPositions does not exist. Setting to empty");
+          loginData.EHpackeryPositions = "";
 
-                  }
+        }
 
-                  if (typeof loginData.packerySizes == 'undefined') {
-                    debug("packerySizes does not exist. Setting to empty");
-                    loginData.packerySizes = "";
+        if (typeof loginData.packerySizes == 'undefined') {
+          //debug("packerySizes does not exist. Setting to empty");
+          loginData.packerySizes = "";
 
-                  }
+        }
 
-                  if (typeof loginData.use24hr == 'undefined') {
-                    debug("use24hr does not exist. Setting to false");
-                    loginData.use24hr = false;
+        if (typeof loginData.use24hr == 'undefined') {
+          //debug("use24hr does not exist. Setting to false");
+          loginData.use24hr = false;
 
-                  }
+        }
 
-                  if (typeof timelineModalGraphType == 'undefined') {
-                    debug("timeline graph type not set. Setting to all");
-                    loginData.timelineModalGraphType = $translate.instant('kGraphAll');
-                    //console.log(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>" + loginData.timelineModalGraphType);
-                  }
+        if (typeof timelineModalGraphType == 'undefined') {
+          //debug("timeline graph type not set. Setting to all");
+          loginData.timelineModalGraphType = $translate.instant('kGraphAll');
+          //console.log(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>" + loginData.timelineModalGraphType);
+        }
 
-                  if (typeof loginData.resumeDelay == 'undefined') {
-                    debug("resumeDelay does not exist. Setting to 0");
-                    loginData.resumeDelay = 0;
+        if (typeof loginData.resumeDelay == 'undefined') {
+          //debug("resumeDelay does not exist. Setting to 0");
+          loginData.resumeDelay = 0;
 
-                  }
-                  // override resumeDelay - it was developed on a wrong assumption
-                  loginData.resumeDelay = 0;
+        }
+        // override resumeDelay - it was developed on a wrong assumption
+        loginData.resumeDelay = 0;
 
-                  if (typeof loginData.montageHistoryQuality == 'undefined') {
-                    debug("montageHistoryQuality does not exist. Setting to 50");
-                    loginData.montageHistoryQuality = "50";
+        if (typeof loginData.montageHistoryQuality == 'undefined') {
+          debug("montageHistoryQuality does not exist. Setting to 50");
+          loginData.montageHistoryQuality = "50";
 
-                  }
+        }
 
 
 
-                  if (typeof loginData.vibrateOnPush == 'undefined') {
-                    debug("vibrate on push not found, setting to true");
-                    loginData.vibrateOnPush = true;
+        if (typeof loginData.vibrateOnPush == 'undefined') {
+          debug("vibrate on push not found, setting to true");
+          loginData.vibrateOnPush = true;
 
-                  }
+        }
 
-                  if (typeof loginData.isFullScreen == 'undefined') {
+        if (typeof loginData.isFullScreen == 'undefined') {
 
-                    loginData.isFullScreen = false;
+          loginData.isFullScreen = false;
 
-                  }
+        }
 
-                  if (typeof loginData.reloadInMontage == 'undefined') {
+        if (typeof loginData.reloadInMontage == 'undefined') {
 
-                    loginData.reloadInMontage = false;
+          loginData.reloadInMontage = false;
 
-                  }
+        }
 
-                  if (typeof loginData.soundOnPush == 'undefined') {
-                    debug("sound on push not found, setting to true");
-                    loginData.soundOnPush = true;
+        if (typeof loginData.soundOnPush == 'undefined') {
+          debug("sound on push not found, setting to true");
+          loginData.soundOnPush = true;
 
-                  }
+        }
 
-                  if (typeof loginData.cycleMonitors == 'undefined') {
+        if (typeof loginData.cycleMonitors == 'undefined') {
 
-                    loginData.cycleMonitors = false;
+          loginData.cycleMonitors = false;
 
-                  }
+        }
 
-                  if (typeof loginData.cycleMonitorsInterval == 'undefined') {
+        if (typeof loginData.cycleMonitorsInterval == 'undefined') {
 
-                    loginData.cycleMonitorsInterval = 10;
+          loginData.cycleMonitorsInterval = 10;
 
-                  }
+        }
 
-                  if (typeof loginData.cycleMontage == 'undefined') {
+        if (typeof loginData.cycleMontage == 'undefined') {
 
-                    loginData.cycleMontage = false;
+          loginData.cycleMontage = false;
 
-                  }
+        }
 
-                  if (typeof loginData.cycleMontageInterval == 'undefined') {
+        if (typeof loginData.cycleMontageInterval == 'undefined') {
 
-                    loginData.cycleMontageInterval = 10;
+          loginData.cycleMontageInterval = 10;
 
-                  }
+        }
 
-                  if (typeof loginData.enableLowBandwidth == 'undefined') {
+        if (typeof loginData.enableLowBandwidth == 'undefined') {
 
-                    loginData.enableLowBandwidth = false;
+          loginData.enableLowBandwidth = false;
 
-                  }
-                  // wtf is wrong with this ternary?
-                  //$rootScope.runMode = (loginData.enableLowBandwith==true)? "low": "normal";
+        }
+ 
 
-                  if (typeof loginData.autoSwitchBandwidth == 'undefined') {
+        if (typeof loginData.autoSwitchBandwidth == 'undefined') {
 
-                    loginData.autoSwitchBandwidth = false;
+          loginData.autoSwitchBandwidth = false;
 
-                  }
+        }
 
-                  $rootScope.runMode = getBandwidth();
-                  log("Setting NVR init bandwidth to: " + $rootScope.runMode);
+        $rootScope.runMode = getBandwidth();
+        log("Setting NVR init bandwidth to: " + $rootScope.runMode);
 
-                  if (typeof loginData.refreshSecLowBW == 'undefined') {
+        if (typeof loginData.refreshSecLowBW == 'undefined') {
 
-                    loginData.refreshSecLowBW = 8;
+          loginData.refreshSecLowBW = 8;
 
-                  }
+        }
 
-                  if (typeof loginData.disableAlarmCheckMontage == 'undefined') {
+        if (typeof loginData.singleliveFPS == 'undefined') {
 
-                    loginData.disableAlarmCheckMontage = false;
+          loginData.singleliveFPS = '';
 
-                  }
+        }
 
-                  if (typeof loginData.useLocalTimeZone == 'undefined') {
+        if (typeof loginData.montageliveFPS == 'undefined') {
 
-                    loginData.useLocalTimeZone = true;
+          loginData.montageLiveFPS = '';
 
-                  }
+        }
 
-                  if (typeof loginData.fastLogin == 'undefined') {
+        if (typeof loginData.disableAlarmCheckMontage == 'undefined') {
 
-                    loginData.fastLogin = true;
+          loginData.disableAlarmCheckMontage = false;
 
-                  }
+        }
 
-                  if (typeof loginData.currentMontageProfile == 'undefined') {
+        if (typeof loginData.useLocalTimeZone == 'undefined') {
 
-                    loginData.currentMontageProfile = '';
+          loginData.useLocalTimeZone = true;
 
-                  }
+        }
 
-                  if (typeof loginData.followTimeLine == 'undefined') {
+        if (typeof loginData.fastLogin == 'undefined') {
 
-                    loginData.followTimeLine = false;
+          loginData.fastLogin = true;
 
-                  }
+        }
 
-                  if (typeof loginData.timelineScale == 'undefined') {
+        if (typeof loginData.currentMontageProfile == 'undefined') {
 
-                    loginData.timelineScale = -1;
+          loginData.currentMontageProfile = '';
 
-                  }
+        }
 
+        if (typeof loginData.followTimeLine == 'undefined') {
 
-                  if (typeof loginData.showMontageSubMenu == 'undefined') {
+          loginData.followTimeLine = false;
 
-                    loginData.showMontageSubMenu = false;
+        }
 
-                  }
+        if (typeof loginData.timelineScale == 'undefined') {
 
+          loginData.timelineScale = -1;
 
+        }
 
-                  if (typeof loginData.monSingleImageQuality == 'undefined') {
 
-                    loginData.monSingleImageQuality = 100;
+        if (typeof loginData.showMontageSubMenu == 'undefined') {
 
-                  }
+          loginData.showMontageSubMenu = false;
 
-                  if (typeof loginData.hideArchived == 'undefined') {
+        }
 
-                    loginData.hideArchived = false;
 
-                  }
 
-                  if (typeof loginData.videoPlaybackSpeed == 'undefined') {
+        if (typeof loginData.monSingleImageQuality == 'undefined') {
 
-                    loginData.videoPlaybackSpeed = 1;
+          loginData.monSingleImageQuality = 100;
 
-                  }
+        }
 
+        if (typeof loginData.hideArchived == 'undefined') {
 
+          loginData.hideArchived = false;
 
-                  if (typeof loginData.enableThumbs == 'undefined') {
+        }
 
-                    loginData.enableThumbs = true;
+        if (typeof loginData.videoPlaybackSpeed == 'undefined') {
 
-                  }
+          loginData.videoPlaybackSpeed = 1;
 
-                  if (typeof loginData.enableSlowLoading == 'undefined') {
+        }
 
-                    loginData.enableSlowLoading = false;
 
-                  }
 
+        if (typeof loginData.enableThumbs == 'undefined') {
 
-                  if (typeof loginData.enableStrictSSL == 'undefined') {
+          loginData.enableThumbs = true;
 
-                    loginData.enableStrictSSL = false;
+        }
 
-                  }
+        if (typeof loginData.enableSlowLoading == 'undefined') {
 
-                  if (typeof loginData.momentGridSize == 'undefined') {
+          loginData.enableSlowLoading = false;
 
-                    loginData.momentGridSize = 40;
+        }
 
-                  }
 
-                  if (typeof loginData.enableMomentSubMenu == 'undefined') {
+        if (typeof loginData.enableStrictSSL == 'undefined') {
 
-                    loginData.enableMomentSubMenu = true;
+          loginData.enableStrictSSL = false;
 
-                  }
+        }
 
-                  if (typeof loginData.momentMonitorFilter == 'undefined') {
+        if (typeof loginData.momentGridSize == 'undefined') {
 
-                    loginData.momentMonitorFilter = JSON.stringify([]);
+          loginData.momentGridSize = 40;
 
-                  }
+        }
 
+        if (typeof loginData.enableMomentSubMenu == 'undefined') {
 
-                  if (typeof loginData.momentArrangeBy == 'undefined') {
+          loginData.enableMomentSubMenu = true;
 
-                    loginData.momentArrangeBy = "StartTime";
+        }
 
-                  }
+        if (typeof loginData.momentShowIcons == 'undefined') {
 
-                  if (typeof loginData.insertBasicAuthToken == 'undefined') {
+          loginData.momentShowIcons = false;
 
-                    loginData.insertBasicAuthToken = false;
+        }
 
-                  }
 
+        if (typeof loginData.momentMonitorFilter == 'undefined') {
 
-                  if (typeof loginData.showLiveForInProgressEvents == 'undefined') {
+          loginData.momentMonitorFilter = JSON.stringify([]);
 
-                    loginData.showLiveForInProgressEvents = true;
+        }
 
-                  }
 
+        if (typeof loginData.momentArrangeBy == 'undefined') {
 
-                  if (typeof loginData.loginAPISupported == 'undefined') {
+          loginData.momentArrangeBy = "StartTime";
 
-                    loginData.loginAPISupported = false;
+        }
 
-                  }
+        if (typeof loginData.insertBasicAuthToken == 'undefined') {
 
-                  if (typeof loginData.montageResizeSteps == 'undefined') {
+          loginData.insertBasicAuthToken = false;
 
-                    loginData.montageResizeSteps = 5;
+        }
 
-                  }
 
-                  if (typeof loginData.saveToCloud == 'undefined') {
+        if (typeof loginData.showLiveForInProgressEvents == 'undefined') {
 
-                    loginData.saveToCloud = true;
+          loginData.showLiveForInProgressEvents = true;
 
-                  }
+        }
 
 
+        if (typeof loginData.loginAPISupported == 'undefined') {
 
-                  if (typeof loginData.montageReviewCollapse == 'undefined') {
+          loginData.loginAPISupported = false;
 
-                    loginData.montageReviewCollapse = true;
+        }
 
-                  }
+        if (typeof loginData.montageResizeSteps == 'undefined') {
 
-                  if (typeof loginData.objectDetectionFilter == 'undefined') {
+          loginData.montageResizeSteps = 5;
 
-                    loginData.objectDetectionFilter = false;
+        }
 
-                  }
+        if (typeof loginData.saveToCloud == 'undefined') {
 
-                  if (typeof loginData.enableEventRefresh == 'undefined') {
+          loginData.saveToCloud = true;
 
-                    loginData.enableEventRefresh = true;
+        }
 
-                  }
 
-                 
-                  
-                  if (typeof loginData.lastEventCheckTimes == 'undefined') {
-                    loginData.lastEventCheckTimes = {};
 
-                  }
+        if (typeof loginData.montageReviewCollapse == 'undefined') {
 
+          loginData.montageReviewCollapse = true;
 
-                if (typeof loginData.enableMontageOverlays == 'undefined') {
-                    loginData.enableMontageOverlays = true;
+        }
 
-                  }
+        if (typeof loginData.objectDetectionFilter == 'undefined') {
 
-                  if (typeof loginData.showMontageSidebars == 'undefined') {
-                    loginData.showMontageSidebars = false;
+          loginData.objectDetectionFilter = false;
 
-                  }
+        }
 
-                  loginData.canSwipeMonitors = true;
-                  loginData.forceImageModePath = false;
-                  loginData.enableBlog = true;
+        if (typeof loginData.enableEventRefresh == 'undefined') {
 
+          loginData.enableEventRefresh = true;
+
+        }
+
+
+
+        if (typeof loginData.lastEventCheckTimes == 'undefined') {
+          loginData.lastEventCheckTimes = {};
+
+        }
+
+
+        if (typeof loginData.enableMontageOverlays == 'undefined') {
+          loginData.enableMontageOverlays = true;
+
+        }
+
+        if (typeof loginData.showMontageSidebars == 'undefined') {
+          loginData.showMontageSidebars = false;
+
+        }
+
+        if (typeof loginData.isTokenSupported == 'undefined') {
+          loginData.isTokenSupported = false;
+
+        }
+
+        if (typeof loginData.accessTokenExpires == 'undefined') {
+          loginData.accessTokenExpires = '';
+
+        }
+
+        if (typeof loginData.refreshTokenExpires == 'undefined') {
+          loginData.refreshTokenExpires = '';
+
+        }
+
+        if (typeof loginData.refreshToken == 'undefined') {
+          loginData.refreshToken = '';
+
+        }
+
+        if (typeof loginData.accessToken == 'undefined') {
+          loginData.accessToken = '';
+
+        }
+
+        if (typeof loginData.isKiosk == 'undefined') {
+          loginData.isKiosk = false;
+
+        }
+        if (typeof loginData.useAPICaching == 'undefined') {
+          loginData.useAPICaching = true;
+
+        }
+
+        if (typeof loginData.pauseStreams == 'undefined') {
+          loginData.pauseStreams = false;
+
+        }
+
+        if (typeof loginData.liveStreamBuffer == 'undefined') {
+          loginData.liveStreamBuffer = 10;
+        }
+
+        if ((typeof loginData.zmNinjaCustomId == 'undefined') || (loginData.zmNinjaCustomId == '')) {
+          loginData.zmNinjaCustomId = 'zmNinja_'+zmAppVersion;
+        }
+
+        if (typeof loginData.obfuscationScheme == 'undefined')  {
+          loginData.obfuscationScheme = 'lzs';
+        }
+
+        loginData.canSwipeMonitors = true;
+        loginData.forceImageModePath = false;
+        loginData.enableBlog = true;
+        loginData.pauseStreams = true;
+
+      }
+
+      function regenConnKeys (mon) {
+        var nowt = moment();
+        if (mon) {
+          debug ("NVR: Regnerating connkey for Monitor:"+mon.Monitor.Id + " at "+nowt);
+          mon.Monitor.connKey = (Math.floor((Math.random() * 999999) + 1)).toString();
+          mon.Monitor.regenTime = nowt;
+          if (mon.Monitor.regenHandle) {
+            //debug ("cancelling regen timer for Monitor:"+mon.Monitor.Id);
+            $timeout.cancel(mon.Monitor.regenHandle);
+            mon.Monitor.regenHandle = null;
+          }
+         
+        } else {
+          debug("NVR: Regenerating connkeys for all monitors at "+nowt);
+          for (var i = 0; i < monitors.length; i++) {
+            monitors[i].Monitor.connKey = (Math.floor((Math.random() * 999999) + 1)).toString();
+            monitors[i].Monitor.rndKey = (Math.floor((Math.random() * 999999) + 1)).toString();
+            monitors[i].Monitor.regenTime = nowt;
+            if (monitors[i].Monitor.regenHandle) {
+              $timeout.cancel(monitors[i].Monitor.regenHandle);
+              monitors[i].Monitor.regenHandle = null;
+            }
+          }
+
+        }
       }
 
       //--------------------------------------------------------------------------
@@ -1099,14 +1685,66 @@ angular.module('zmApp.controllers')
         debug("Setting server version to:" + val);
       }
 
+      function encrypt(data) {
+
+        var jsdata = JSON.stringify(data);
+        var compress;
+
+        if (loginData.obfuscationScheme == 'lzs') {
+          compress = '--Z--'+LZString.compressToUTF16(jsdata);
+
+        }
+        else if (loginData.obfuscationScheme == 'aes') {
+          compress = CryptoJS.AES.encrypt(jsdata, zm.cipherKey).toString();
+        } else {
+          log ('ERROR: obfuscation scheme:'+loginData.obfuscationScheme+' not recognized');
+          return undefined;
+        }
+    
+        debug ('obfuscate: original:'+jsdata.length+' obfuscated:'+compress.length+' scheme:'+loginData.obfuscationScheme);
+        return compress;
+      }
+
+      function decrypt(data) {
+        //debug ('-->deobfuscating '+data.length+' bytes using scheme:'+loginData.obfuscationScheme);
+        var decodedVal;
+        var scheme;
+        if (data.substr(0,5) == '--Z--') {
+          //debug ('unpacking');
+          scheme = 'lzs';
+          decodedVal = LZString.decompressFromUTF16(data.substr(5));
+        } else {
+          var bytes = CryptoJS.AES.decrypt(data.toString(), zm.cipherKey);
+          decodedVal = bytes.toString(CryptoJS.enc.Utf8);
+          scheme = 'aes';
+        }
+        
+        //console.log ('-->decrypted ' + decodedVal);
+        debug ('deobfuscate: before:'+data.length+' after:'+decodedVal.length+' scheme:'+scheme);
+        var decodedJSON = JSON.parse(decodedVal);
+       
+        return (decodedJSON);
+      }
+
 
       return {
 
+        encrypt: function(data) {
+          return encrypt(data);
+        },
 
-        insertBasicAuthToken: function () {
+        decrypt: function(data) {
+          return decrypt(data);
+        },
 
-          return loginData.insertBasicAuthToken && $rootScope.basicAuthToken ? "&basicauth=" + $rootScope.basicAuthToken : "";
+        insertSpecialTokens: function () {
 
+          var tokens = '';
+          tokens+='&id='+loginData.zmNinjaCustomId;
+          if (loginData.insertBasicAuthToken && $rootScope.basicAuthToken) {
+            tokens += "&basicauth=" + $rootScope.basicAuthToken;
+          }
+          return tokens;
         },
 
         setCurrentServerMultiPortSupported: function (val) {
@@ -1163,6 +1801,15 @@ angular.module('zmApp.controllers')
           var stateParams2 = {};
 
           debug("Inside evaluateNotifications");
+
+          if ($rootScope.LoginData.isKiosk) {
+            NVR.log ('>>> evaluation: You are in kiosk mode, forcing transition to montage');
+            state = "app.montage";
+            $rootScope.tappedNotification = 0;
+            return [state, stateParams1, stateParams2];
+            
+
+          }
 
           if ($rootScope.tappedNotification == 2) { // url launch
             debug("Came via app url launch with mid=" + $rootScope.tappedMid);
@@ -1298,11 +1945,21 @@ angular.module('zmApp.controllers')
                 log("reached end of chain loop");
               }
             } else {
-              log("detected loop when " + tLd.serverName + " fallsback to " + tLd.fallbackConfiguration);
+              if (tLd.fallbackConfiguration) {
+                log("detected loop when " + tLd.serverName + " fallsback to " + tLd.fallbackConfiguration);
+              }
+              
               keepBuilding = false;
             }
           }
+          
+          if (chainURLs.length == 1) {
+            log ('No need to do a reachability test, as there are no fallbacks');
+            d.resolve("done");
+            return d.promise;
+          }
 
+          console.log ('chainURLS:'+ chainURLs.length);
           //contactedServers.push(loginData.serverName);
           findFirstReachableUrl(chainURLs).then(function (firstReachableUrl) {
             d.resolve(firstReachableUrl);
@@ -1335,8 +1992,12 @@ angular.module('zmApp.controllers')
 
           function findFirstReachableUrl(urls) {
             if (urls.length > 0 && $rootScope.userCancelledAuth != true) {
+
+             
+
               $ionicLoading.show({
-                template: $translate.instant('kTrying') + ' ' + urls[0].server
+                template: "<a style='color:white; text-decoration:none' href='#' ng-click='$root.cancelAuth()' <i class='ion-close-circled'></i>&nbsp;" + $translate.instant('kTrying')+ ' ' + urls[0].server+"</a>",
+                noBackdrop: true,
               });
               log("Reachability test.." + urls[0].url);
 
@@ -1371,7 +2032,7 @@ angular.module('zmApp.controllers')
           return d.promise;
 
         },
-
+ 
         cloudSync: function () {
 
           var d = $q.defer();
@@ -1405,8 +2066,8 @@ angular.module('zmApp.controllers')
 
                 if (typeof sgl == 'string') {
                   log("user profile encrypted, decoding...");
-                  var bytes = CryptoJS.AES.decrypt(sgl.toString(), zm.cipherKey);
-                  decodedSgl = JSON.parse(bytes.toString(CryptoJS.enc.Utf8));
+                  decodedSgl = decrypt(sgl);
+            
 
                 } else {
                   decodedSgl = sgl;
@@ -1496,7 +2157,7 @@ angular.module('zmApp.controllers')
         },
 
         checkInitSanity: function (l) {
-            _checkInitSanity(l);
+          _checkInitSanity(l);
         },
 
         init: function () {
@@ -1524,8 +2185,7 @@ angular.module('zmApp.controllers')
 
             if (typeof val == 'string') {
               log("user profile encrypted, decoding...");
-              var bytes = CryptoJS.AES.decrypt(val.toString(), zm.cipherKey);
-              decodedVal = JSON.parse(bytes.toString(CryptoJS.enc.Utf8));
+              decodedVal = decrypt(val);
 
             } else {
               log("user profile not encrypted");
@@ -1564,7 +2224,7 @@ angular.module('zmApp.controllers')
                 if (window.cordova) setCordovaHttpOptions();
 
 
-
+                $rootScope.LoginData = loginData;
                 $rootScope.$broadcast('init-complete');
               });
 
@@ -1593,13 +2253,13 @@ angular.module('zmApp.controllers')
           return timeSinceResumed;
         },
 
-        stopNetwork: function (str) {
+        stopNetwork: function (str, dontDoIt) {
           var d = $q.defer();
           var s = "";
           if (str) s = str + ":";
-          if (justResumed) {
+          if (justResumed || dontDoIt) {
             // we don't call stop as we did stop on pause
-            log(s + " Not calling window stop as we just resumed");
+            log(s + " Not calling window stop ");
             d.resolve(true);
             return (d.promise);
 
@@ -1692,6 +2352,13 @@ angular.module('zmApp.controllers')
 
         setAppVersion: function (ver) {
           zmAppVersion = ver;
+          $rootScope.appVersion = ver; // for custom header
+
+          //console.log ('****** VER:'+$rootScope.appVersion);
+        },
+
+        getCustomHeader: function () {
+          return loginData.zmNinjaCustomId;
         },
 
         getAppVersion: function () {
@@ -1830,12 +2497,12 @@ angular.module('zmApp.controllers')
         getAPIversion: function () {
 
           var d = $q.defer();
-          var apiurl = loginData.apiurl + '/host/getVersion.json';
+          var apiurl = loginData.apiurl + '/host/getVersion.json?' + $rootScope.authSession;
           debug("getAPIversion called with " + apiurl);
-          $http.get(apiurl)
+          cache_or_http(apiurl,'cached_api_version',false, 3600*24)
             .then(function (success) {
                 if (success.data.version) {
-                  console.log("API VERSION RETURNED: " + JSON.stringify(success));
+                  //console.log("API VERSION RETURNED: " + JSON.stringify(success));
                   $rootScope.apiValid = true;
 
                   if (versionCompare(success.data.version, '1.32.0') != -1) {
@@ -1848,12 +2515,7 @@ angular.module('zmApp.controllers')
                   setCurrentServerVersion(success.data.version);
                   debug("getAPI version succeeded with " + success.data.version);
                   d.resolve(success.data.version);
-                } else {
-                  debug("Setting APIValid to false as API version was not retrieved");
-                  $rootScope.apiValid = false;
-                  setCurrentServerVersion("");
-                  d.reject("-1.-1.-1");
-                }
+                } 
                 return (d.promise);
 
               },
@@ -1875,6 +2537,11 @@ angular.module('zmApp.controllers')
         isReCaptcha: function () {
           // always resolves
           var d = $q.defer();
+          if (loginData.isTokenSupported) {
+            debug ('No need for re-captcha checks with tokens');
+            d.resolve(false);
+            return (d.promise);
+          }
 
           var myurl = loginData.url;
           log("Checking if reCaptcha is enabled in ZM...");
@@ -1942,17 +2609,21 @@ angular.module('zmApp.controllers')
 
         getAuthHashLogin: function () {
 
-          return $http.get(loginData.apiurl + '/configs/viewByName/ZM_AUTH_HASH_LOGINS.json');
+          return $http.get(loginData.apiurl + '/configs/viewByName/ZM_AUTH_HASH_LOGINS.json?' + $rootScope.authSession);
 
         },
 
         getKeyConfigParams: function (forceReload) {
 
           var d = $q.defer();
+          configParams.ZM_EVENT_IMAGE_DIGITS = 5;
+          d.resolve(configParams.ZM_EVENT_IMAGE_DIGITS);
+          return (d.promise);
 
+          /*
           if (forceReload == 1 || configParams.ZM_EVENT_IMAGE_DIGITS == '-1') {
             var apiurl = loginData.apiurl;
-            var myurl = apiurl + '/configs/viewByName/ZM_EVENT_IMAGE_DIGITS.json';
+            var myurl = apiurl + '/configs/viewByName/ZM_EVENT_IMAGE_DIGITS.json?' + $rootScope.authSession;
             //debug("Config URL for digits is:" + myurl);
             $http.get(myurl)
               .then(function (data) {
@@ -1977,7 +2648,7 @@ angular.module('zmApp.controllers')
             return (d.promise);
           }
           return (d.promise);
-
+          */
         },
 
         //--------------------------------------------------------------------------
@@ -1989,7 +2660,7 @@ angular.module('zmApp.controllers')
 
 
           var apiurl = loginData.apiurl;
-          var myurl = apiurl + '/configs/viewByName/ZM_PATH_ZMS.json';
+          var myurl = apiurl + '/configs/viewByName/ZM_PATH_ZMS.json?' + $rootScope.authSession;
           debug("Config URL for ZMS PATH is:" + myurl);
           $http.get(myurl)
             .then(function (data) {
@@ -2109,85 +2780,15 @@ angular.module('zmApp.controllers')
             );
         },
 
-        /*killStream: function (ck) {
-          debug ("Killing connKey: "+ck);
-          var myauthtoken = $rootScope.authSession.replace("&auth=", "");
-          var req = $http(
-            {
-                method: 'POST',
-      
-                url: loginData.url + '/index.php',
-                headers:
-                {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    ,
-                },
-                transformRequest: function(obj)
-                {
-                    var str = [];
-                    for (var p in obj)
-                        str.push(encodeURIComponent(p) + "=" +
-                            encodeURIComponent(obj[p]));
-                    var foo = str.join("&");
-                    //console.log("****RETURNING " + foo);
-                    return foo;
-                },
-    
-                data:
-                {
-                    view: "request",
-                    request: "stream",
-                    connkey: ck,
-                    command: 3,
-                    auth: myauthtoken,
-    
-                }
-            })
-            .then (function (succ) {
-                console.log ("STOP/KILL OK WITH: " + JSON.stringify(succ));
-            },
-            function (err) {
-              console.log ("KILL ERROR WITH: " + JSON.stringify(err));
-            });
+        regenConnKeys: function (mon) {
 
-
-      },*/
-
-        getMultiServersCached: function () {
-          return multiservers;
-        },
-
-        // use non cached for daemon status
-        getMultiServers: function () {
-          return $http.get(loginData.apiurl + '/servers.json');
-
-        },
-
-        getMultiServer: function (id) {
-
-          var ndx = -1;
-          for (var i = 0; i < multiservers.length; i++) {
-            if (multiservers[i].Server.Id == id) {
-              ndx = i;
-              break;
-            }
-          }
-          return ndx == -1 ? {} : multiservers[ndx];
-
-        },
-
-        regenConnKeys: function () {
-
-          debug("NVR: Regenerating connkeys...");
-          for (var i = 0; i < monitors.length; i++) {
-            monitors[i].Monitor.connKey = (Math.floor((Math.random() * 999999) + 1)).toString();
-            monitors[i].Monitor.rndKey = (Math.floor((Math.random() * 999999) + 1)).toString();
-          }
+         return regenConnKeys (mon);
         },
 
         getMonitors: function (forceReload) {
           //console.log("** Inside ZMData getMonitors with forceReload=" + forceReload);
 
+          
           $ionicLoading.show({
             template: $translate.instant('kLoadingMonitors'),
             animation: 'fade-in',
@@ -2204,7 +2805,7 @@ angular.module('zmApp.controllers')
             log((forceReload == 1) ? "getMonitors:Force reloading all monitors" : "getMonitors:Loading all monitors");
             var apiurl = loginData.apiurl;
             var myurl = apiurl + "/monitors";
-            myurl += "/index/Type !=:WebSite.json";
+            myurl += "/index/Type !=:WebSite.json?" + $rootScope.authSession;
 
             getZmsMultiPortSupport()
               .then(function (zmsPort) {
@@ -2213,14 +2814,29 @@ angular.module('zmApp.controllers')
 
                 debug("ZMS Multiport reported: " + zmsPort);
                 debug("Monitor URL to fetch is:" + myurl);
-                $http.get(myurl /*,{timeout:15000}*/ )
+                cache_or_http(myurl,'cached_monitors', true,3600*24)
+                //$http.get(myurl /*,{timeout:15000}*/ )
                   .then(function (data) {
                       //  console.log("HTTP success got " + JSON.stringify(data.monitors));
                       data = data.data;
                       if (data.monitors) monitors = data.monitors;
 
+                      // Now let's make sure we remove repeating monitors
+                      // may happen in groups case
 
-                      if ($rootScope.authSession == 'undefined') {
+                      debug ("Before duplicate processing, we have: "+monitors.length+" monitors");
+                      //console.log (JSON.stringify(monitors));
+                      var monitorHash = {};
+                      for (var mo in monitors) {
+                        monitorHash[monitors[mo].Monitor.Id] = monitors[mo];
+                      }
+                      monitors = [];
+                      for (mo in monitorHash) {
+                        monitors.push(monitorHash[mo]);
+                      }
+                      debug ("After duplicate processing, we have: "+monitors.length+" monitors");
+                      //console.log (JSON.stringify(monitors));
+                      if ($rootScope.authSession == '') {
                         log("Now that we have monitors, lets get AuthKey...");
                         getAuthKey(monitors[0].Monitor.Id, (Math.floor((Math.random() * 999999) + 1)).toString());
                       }
@@ -2234,12 +2850,12 @@ angular.module('zmApp.controllers')
 
                       debug("Inside getMonitors, will also regen connkeys");
                       debug("Now trying to get multi-server data, if present");
-                      $http.get(apiurl + "/servers.json")
+                      cache_or_http(apiurl + "/servers.json?" + $rootScope.authSession, 'cached_multi_servers', true, 3600*24)
                         .then(function (data) {
                             data = data.data;
                             // We found a server list API, so lets make sure
                             // we get the hostname as it will be needed for playback
-                            log("multi server list loaded:" + JSON.stringify(data));
+                            log("multi server list loaded");
                             multiservers = data.servers;
 
                             var multiserver_scheme = "http://";
@@ -2252,7 +2868,8 @@ angular.module('zmApp.controllers')
 
                             for (var i = 0; i < monitors.length; i++) {
 
-                              // make them all show for now
+                               // zm 1.33.15 prefixes 'ROTATE_' to orientation
+                               monitors[i].Monitor.Orientation  = monitors[i].Monitor.Orientation.replace('ROTATE_','');
 
                               var recordingType = '';
                               if (monitors[i].Monitor.SaveJPEGs > 0) {
@@ -2309,8 +2926,8 @@ angular.module('zmApp.controllers')
 
 
                                 debug("recording server reported  is " + JSON.stringify(m));
-                                debug("portal  parsed is " + JSON.stringify(p));
-                                debug("streaming url  parsed is " + JSON.stringify(s));
+                                //debug("portal  parsed is " + JSON.stringify(p));
+                                //debug("streaming url  parsed is " + JSON.stringify(s));
                                 debug("multi-port is:" + zmsPort);
 
                                 var st = "";
@@ -2350,7 +2967,7 @@ angular.module('zmApp.controllers')
                                     var sport = parseInt(zmsPort) + parseInt(monitors[i].Monitor.Id);
                                     st = st + ':' + sport;
                                   }
-                                 
+
                                 }
 
                                 baseurl = st;
@@ -2434,6 +3051,8 @@ angular.module('zmApp.controllers')
 
                             for (var i = 0; i < monitors.length; i++) {
                               //monitors[i].Monitor.listDisplay = 'show';
+                              // zm 1.33.15 prefixes 'ROTATE_' to orientation
+                              monitors[i].Monitor.Orientation  = monitors[i].Monitor.Orientation.replace('ROTATE_','');
                               monitors[i].Monitor.isAlarmed = false;
                               monitors[i].Monitor.connKey = (Math.floor((Math.random() * 999999) + 1)).toString();
                               monitors[i].Monitor.rndKey = (Math.floor((Math.random() * 999999) + 1)).toString();
@@ -2500,9 +3119,156 @@ angular.module('zmApp.controllers')
 
         },
 
+        proceedWithLogin: function (obj) {
+
+          var noBroadcast = false;
+          var tryAccess = true;
+          var tryRefresh = true;
+
+          if (obj) {
+            noBroadcast = obj.nobroadcast;
+            tryAccess = obj.access;
+            tryRefresh = obj.refresh;
+
+          }
+
+          var d = $q.defer();
+        
+           // This is a good time to check if auth is used :-p
+           if (!loginData.isUseAuth) {
+            log("Auth is disabled, setting authSession to empty");
+            $rootScope.apiValid = true;
+            $rootScope.authSession = '';
+            d.resolve("Login Success");
+  
+            if (!noBroadcast) $rootScope.$broadcast('auth-success', 'no auth');
+            return (d.promise);
+  
+          }
+  
+  
+          // lets first try tokens and stored tokens
+          if (loginData.isTokenSupported) 
+          {
+            log ("Detected token login supported");
+            var now = moment.utc();
+            var diff_access = moment.utc(loginData.accessTokenExpires).diff(now, 'minutes');
+            var diff_refresh = moment.utc(loginData.refreshTokenExpires).diff(now, 'minutes');
+  
+            // first see if we can work with access token
+            if (moment.utc(loginData.accessTokenExpires).isAfter(now) &&  diff_access  >=zm.accessTokenLeewayMin && tryAccess) {
+              log ("Access token still has "+diff_access+" minutes left, using it");
+              log ('----> Setting token re-login after '+diff_access*60+' seconds');
+                  if (tokenExpiryTimer) $timeout.cancel(tokenExpiryTimer);
+                  tokenExpiryTimer = $timeout ( function () {
+                    $rootScope.$broadcast('token-expiry');
+                  }, diff_access * 60  * 1000);
+                  
+              
+              
+              $rootScope.authSession = '&token='+loginData.accessToken;
+              d.resolve("Login success via access token");
+//              console.log ("**************** TOKEN SET="+$rootScope.authSession);
+              if (!noBroadcast) $rootScope.$broadcast('auth-success', ''  );
+              return d.promise;
+            } 
+            // then see if we have at least 30 mins left for refresh token
+            else if (moment.utc(loginData.refreshTokenExpires).isAfter(now) &&  diff_refresh  >=zm.refreshTokenLeewayMin && tryRefresh) {
+              log ("Refresh token still has "+diff_refresh+" minutes left, using it");
+              var loginAPI = loginData.apiurl + '/host/login.json?token='+loginData.refreshToken;
+              $http({
+                method:'GET',
+                url: loginAPI,
+                skipIntercept:true,
+              })
+              .then (function (succ) {
+                succ = succ.data;
+                if (succ.access_token) {
+
+                 // console.log ("**************** TOKEN SET="+succ.access_token);
+                  $rootScope.authSession = '&token='+succ.access_token;
+                  log ("New access token retrieved: ..."+succ.access_token.substr(-5));
+                  loginData.accessToken = succ.access_token;
+                  loginData.accessTokenExpires = moment.utc().add(succ.access_token_expires,'seconds');
+                  //succ.access_token_expires = 30;
+                  $rootScope.tokenExpires = succ.access_token_expires;
+                  log ('----> Setting token re-login after '+succ.access_token_expires+' seconds');
+                  if (tokenExpiryTimer) $timeout.cancel(tokenExpiryTimer);
+                  tokenExpiryTimer = $timeout ( function () {
+                    $rootScope.$broadcast('token-expiry');
+                  }, succ.access_token_expires * 1000);
+                  log ("Current time is: UTC "+moment.utc().format("YYYY-MM-DD hh:mm:ss"));
+                  log ("New access token expires on: UTC "+loginData.accessTokenExpires.format("YYYY-MM-DD hh:mm:ss"));
+                  log ("New access token expires on:"+loginData.accessTokenExpires.format("YYYY-MM-DD hh:mm:ss"));
+                  loginData.isTokenSupported = true;
+                  setLogin(loginData);
+                  d.resolve("Login success via refresh token");
+                  if (!noBroadcast) $rootScope.$broadcast('auth-success', ''  );
+                  return d.promise;
+                }
+                else {
+                  log ('ERROR:Trying to refresh with refresh token:'+JSON.stringify(succ));
+                  return proceedWithFreshLogin(noBroadcast)
+                  .then (function (succ) { 
+                    d.resolve(succ); 
+                    return (d.promise);
+                  },
+                  function(err) { 
+                    d.resolve(err); 
+                    return (d.promise);
+                  });
+  
+                }
+              },
+              function (err) {
+                  log ('access token login HTTP failed with: '+JSON.stringify(err));
+                  return proceedWithFreshLogin(noBroadcast)
+                  .then (function (succ) { 
+                    d.resolve(succ); 
+                    return (d.promise);
+                  },
+                  function(err) { 
+                    d.resolve(err); 
+                    return (d.promise);});
+              });
+            } // valid refresh
+            else {
+              log ('both access and refresh tokens are expired, using a fresh login');
+              return proceedWithFreshLogin(noBroadcast)
+              .then (function (succ) {
+                 d.resolve(succ); 
+                 return (d.promise);
+                },
+              function(err) { 
+                d.resolve(err); 
+                return (d.promise);
+              });
+            }
+         
+          } // is token supported
+          else {
+            log ("Token login not being used");
+          // coming here means token reloads fell through
+            return proceedWithFreshLogin(noBroadcast)
+            .then (function (succ) { 
+              d.resolve(succ); 
+              return (d.promise);
+            },
+            function(err) { 
+              d.resolve(err); 
+              return (d.promise);
+            });
+          }
+          return (d.promise);
+        
+        },
+  
+       
+  
+
         zmPrivacyProcessed: function () {
           var apiurl = loginData.apiurl;
-          var myurl = apiurl + '/configs/viewByName/ZM_SHOW_PRIVACY.json';
+          var myurl = apiurl + '/configs/viewByName/ZM_SHOW_PRIVACY.json?' + $rootScope.authSession;
           var d = $q.defer();
 
           $http({
@@ -2603,6 +3369,7 @@ angular.module('zmApp.controllers')
           }
           return d.promise;
         },
+      
 
         // returns if this mid is hidden or not
         isNotHidden: function (mid) {
@@ -2635,14 +3402,18 @@ angular.module('zmApp.controllers')
           return isTzSupported;
         },
 
+        flushAPICache: function () {
+            return delete_all_caches();
+        },
+
         getTimeZone: function (isForce) {
 
           var d = $q.defer();
           if (!tz || isForce) {
 
             log("First invocation of TimeZone, asking server");
-            var apiurl = loginData.apiurl + '/host/getTimeZone.json';
-            $http.get(apiurl)
+            var apiurl = loginData.apiurl + '/host/getTimeZone.json?' + $rootScope.authSession;
+            cache_or_http(apiurl, "cached_timezone", false, 3600*24)
               .then(function (success) {
                   tz = success.data.tz;
                   d.resolve(tz);
@@ -2692,19 +3463,19 @@ angular.module('zmApp.controllers')
           if (monitorId != 0)
             myurl = myurl + "/MonitorId:" + monitorId;
           if (startTime)
-            myurl = myurl + "/StartTime >=:" + startTime;
+            myurl = myurl + "/StartTime <=:" + endTime;
           if (endTime)
-            myurl = myurl + "/EndTime <=:" + endTime;
+            myurl = myurl + "/EndTime >=:" + startTime;
 
           myurl = myurl + "/AlarmFrames >=:" + (loginData.enableAlarmCount ? loginData.minAlarmCount : 0);
 
           //https:///zm/api/events/index/Notes%20REGEXP:detected%3A.json
           if (loginData.objectDetectionFilter && !noObjectFilter) {
-            myurl = myurl + '/Notes%20REGEXP:detected%3A';
+            myurl = myurl + '/Notes REGEXP:detected:';
           }
 
 
-          myurl = myurl + ".json";
+          myurl = myurl + ".json?" + $rootScope.authSession;
           //console.log (">>>>>Constructed URL " + myurl);
 
           $ionicLoading.show({
@@ -2750,7 +3521,7 @@ angular.module('zmApp.controllers')
         // new reminder
         // 
         //https:///zm/api/events.json?&sort=StartTime&direction=desc&page=1
-        getEvents: function (monitorId, pageId, loadingStr, startTime, endTime, noObjectFilter) {
+        getEvents: function (monitorId, pageId, loadingStr, startTime, endTime, noObjectFilter, monListFilter) {
 
 
 
@@ -2758,7 +3529,9 @@ angular.module('zmApp.controllers')
           //console.log("ZMData getEvents called with ID=" + monitorId + "and Page=" + pageId);
 
           if (!loadingStr) {
-            loadingStr = $translate.instant('kLoadingEvents') + "...";
+            loadingStr="<button class='button button-clear' style='line-height: normal; min-height: 0; min-width: 0;  color:#fff;' ng-click='$root.cancelAuth()'><i class='ion-close-circled'></i>&nbsp;" + $translate.instant('kLoadingEvents') + "...</button>";
+
+            //loadingStr = $translate.instant('kLoadingEvents') + "...";
           }
           //if (loadingStr) loa
 
@@ -2781,21 +3554,28 @@ angular.module('zmApp.controllers')
           if (monitorId != 0)
             myurl = myurl + "/MonitorId:" + monitorId;
           if (startTime)
-            myurl = myurl + "/StartTime >=:" + startTime;
+            myurl = myurl + "/StartTime <=:" + endTime;
           if (endTime)
-            myurl = myurl + "/EndTime <=:" + endTime;
+            myurl = myurl + "/EndTime >=:" + startTime;
 
           myurl = myurl + "/AlarmFrames >=:" + (loginData.enableAlarmCount ? loginData.minAlarmCount : 0);
 
+          //console.log ('********* MON FILTER '+monListFilter);
+          if (monListFilter) 
+            myurl = myurl + monListFilter;
+
+          // don't know why but adding page messes up Notes
           //https:///zm/api/events/index/Notes%20REGEXP: detected%3A.json
           if (loginData.objectDetectionFilter && !noObjectFilter) {
             myurl = myurl + '/Notes REGEXP:detected:';
           }
 
-          myurl = myurl + ".json?&sort=StartTime&direction=desc&page=" + pageId;
+      
+          myurl = myurl + ".json?&sort=StartTime&direction=desc&page=" + pageId + $rootScope.authSession;
 
 
           debug("getEvents:" + myurl);
+          //console.log ("LOG: "+myurl);
           // Simulated data
 
           // myurl = "https://api.myjson.com/bins/4jx44.json";
@@ -2807,7 +3587,10 @@ angular.module('zmApp.controllers')
                 data = data.data;
                 if (loadingStr != 'none') $ionicLoading.hide();
                 //myevents = data.events;
+
+
                 myevents = data;
+                //console.log (myevents);
 
 
                 d.resolve(myevents);
@@ -3056,18 +3839,33 @@ angular.module('zmApp.controllers')
         },
 
         logout: function () {
-
+          var d = $q.defer();
+          if ($rootScope.userCancelledAuth) {
+            debug ('NVR logout: User cancelled auth, not proceeding');
+            d.reject(true);
+            return d.promise;
+          }
           // always resolves
+          if (!loginData.isUseAuth ||  loginData.isTokenSupported) {
+            log("No need for logout!");
+            d.resolve(true);
+            return d.promise;
+          }
 
+         
+         // $ionicLoading.show({ template: '<button class="button button-clear" style="line-height: normal; min-height: 0; min-width: 0;" ng-click="$root.cancel()"></button><i class="icon ion-chevron-up"></i> Loading...' });
+
+        
           $ionicLoading.show({
-            template: $translate.instant('kCleaningUp'),
+            //template:$translate.instant('kCleaningUp'),
+            template: "<a style='color:white; text-decoration:none' href='#' ng-click='$root.cancelAuth()' <i class='ion-close-circled'></i>&nbsp;" + $translate.instant('kCleaningUp')+"</a>",
             noBackdrop: true,
 
           });
 
-          var d = $q.defer();
+
           log(loginData.url + "=>Logging out of any existing ZM sessions...");
-          $rootScope.authSession = "undefined";
+          $rootScope.authSession = "";
 
 
           // console.log("CURRENT SERVER: " + loginData.currentServerVersion);

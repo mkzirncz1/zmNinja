@@ -52,9 +52,9 @@ angular.module('zmApp.controllers').controller('TimelineModalCtrl', ['$scope', '
         "&fid=" + alarm.id;
 
     
-    if ($rootScope.authSession != 'undefined') stream += $rootScope.authSession;
+     stream += $rootScope.authSession;
 
-    stream += NVR.insertBasicAuthToken();
+    stream += NVR.insertSpecialTokens();
     return stream;
   };
 
@@ -122,7 +122,7 @@ angular.module('zmApp.controllers').controller('TimelineModalCtrl', ['$scope', '
     var img;
     //console.log("Image Mode " + imode);
  
-      img = "<img width='100%' ng-src='" + p + "/index.php?view=image&fid=" + id + "'>";
+      img = "<img width='100%' ng-src='" + p + "/index.php?view=image&fid=" + id + $rootScope.authSession + "'>";
       // console.log ("IS MULTISERVER SO IMAGE IS " + img);
     
     $rootScope.zmPopup = $ionicPopup.alert({
@@ -179,7 +179,7 @@ angular.module('zmApp.controllers').controller('TimelineModalCtrl', ['$scope', '
     var eid = $scope.event.Event.Id;
     //eid = 22302;
     var ld = NVR.getLogin();
-    var apiurl = ld.apiurl + "/events/" + eid + ".json";
+    var apiurl = ld.apiurl + "/events/" + eid + ".json?"+$rootScope.authSession;
     NVR.log("Getting " + apiurl);
     $http.get(apiurl)
       .then(function (success) {

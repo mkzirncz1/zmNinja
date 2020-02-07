@@ -237,8 +237,6 @@ angular.module('zmApp.controllers').controller('zmApp.MontageHistoryCtrl', ['$sc
 
       NVR.debug(">>Initializing monitor array with history specific stuff...");
       for (i = 0; i < $scope.MontageMonitors.length; i++) {
-        //$scope.MontageMonitors[i].Monitor.connKey='';
-        //$scope.MontageMonitors[i].Monitor.connKey = (Math.floor((Math.random() * 99999) + 1)).toString();
         $scope.MontageMonitors[i].Monitor.eventUrl = 'img/noimage.png';
         $scope.MontageMonitors[i].Monitor.eventType = "";
         $scope.MontageMonitors[i].Monitor.eid = "-1";
@@ -261,10 +259,12 @@ angular.module('zmApp.controllers').controller('zmApp.MontageHistoryCtrl', ['$sc
     });
 
 
+    function noop() {}
+    
     function getNextSetHistory() {
 
       // grab events that start on or after the time 
-      apiurl = ld.apiurl + "/events/index/StartTime >=:" + TimeObjectFrom + "/AlarmFrames >=:" + (ld.enableAlarmCount ? ld.minAlarmCount : 0) + ".json?sort=StartTime&direction=asc";
+      apiurl = ld.apiurl + "/events/index/StartTime >=:" + TimeObjectFrom + "/AlarmFrames >=:" + (ld.enableAlarmCount ? ld.minAlarmCount : 0) + ".json?sort=StartTime&direction=asc"+$rootScope.authSession;
       NVR.log("Grabbing history using: " + apiurl);
       // make sure there are no more than 5 active streams (noevent is ok)
       $scope.currentLimit = $scope.monLimit;
@@ -277,7 +277,7 @@ angular.module('zmApp.controllers').controller('zmApp.MontageHistoryCtrl', ['$sc
         var data = succ.data;
         var ld = NVR.getLogin();
         NVR.debug("Got " + data.events.length + "new history events...");
-        console.log (JSON.stringify(data));
+        //console.log (JSON.stringify(data));
         var eid, mid, stime;
         for (i = 0; i < data.events.length; i++) {
           mid = data.events[i].Event.MonitorId;
@@ -301,7 +301,7 @@ angular.module('zmApp.controllers').controller('zmApp.MontageHistoryCtrl', ['$sc
                 if (eType=='video') {
                   var videoURL= $scope.MontageMonitors[j].Monitor.baseURL  + "/index.php?view=view_video&eid=" + eid;
 
-                  if ($rootScope.authSession != 'undefined') videoURL += $rootScope.authSession;
+                  videoURL += $rootScope.authSession;
                   if ($rootScope.basicAuthToken) videoURL = videoURL + "&basicauth=" + $rootScope.basicAuthToken;
 
           
@@ -357,7 +357,7 @@ angular.module('zmApp.controllers').controller('zmApp.MontageHistoryCtrl', ['$sc
         for (i = 0; i < $scope.MontageMonitors.length; i++) {
           //console.log("Fair chance check for " + $scope.MontageMonitors[i].Monitor.Name);
           if ($scope.MontageMonitors[i].Monitor.eventUrl == 'img/noimage.png') {
-            var indivGrab = ld.apiurl + "/events/index/MonitorId:" + $scope.MontageMonitors[i].Monitor.Id + "/StartTime >=:" + TimeObjectFrom + "/AlarmFrames >=:" + (ld.enableAlarmCount ? ld.minAlarmCount : 0) + ".json";
+            var indivGrab = ld.apiurl + "/events/index/MonitorId:" + $scope.MontageMonitors[i].Monitor.Id + "/StartTime >=:" + TimeObjectFrom + "/AlarmFrames >=:" + (ld.enableAlarmCount ? ld.minAlarmCount : 0) + ".json?"+$rootScope.authSession;
             NVR.debug("Monitor " + $scope.MontageMonitors[i].Monitor.Id + ":" + $scope.MontageMonitors[i].Monitor.Name + " does not have events, trying " + indivGrab);
             var p = getExpandedEvents(i, indivGrab);
             promises.push(p);
@@ -373,7 +373,8 @@ angular.module('zmApp.controllers').controller('zmApp.MontageHistoryCtrl', ['$sc
 
           }
 
-        );
+        )
+        .catch (noop);
 
         // At this stage, we have both a general events grab, and specific event grabs for MIDS that were empty
 
@@ -422,7 +423,7 @@ angular.module('zmApp.controllers').controller('zmApp.MontageHistoryCtrl', ['$sc
                 if (eType=='video') {
                   var videoURL= $scope.MontageMonitors[i].Monitor.baseURL  + "/index.php?view=view_video&eid=" + eid;
 
-                  if ($rootScope.authSession != 'undefined') videoURL += $rootScope.authSession;
+                  videoURL += $rootScope.authSession;
                   if ($rootScope.basicAuthToken) videoURL = videoURL + "&basicauth=" + $rootScope.basicAuthToken;
 
           
@@ -531,7 +532,21 @@ angular.module('zmApp.controllers').controller('zmApp.MontageHistoryCtrl', ['$sc
 
   function subControlStream(cmd, connkey) {
     var loginData = NVR.getLogin();
-    var myauthtoken = $rootScope.authSession.replace("&auth=", "");
+    
+    var data_payload = {
+      view: "request",
+      request: "stream",
+      connkey: connkey,
+      command: cmd
+    };
+
+    if ($rootScope.authSession.indexOf("&auth=")!=-1) {
+      data_payload.auth=$rootScope.authSession.match(/&auth=([^&]*)/)[1];
+    }
+    else if ($rootScope.authSession.indexOf("&token=")!=-1) {
+      data_payload.token=$rootScope.authSession.match(/&token=([^&]*)/)[1];
+    }
+
     //&auth=
     var req = qHttp({
       method: 'POST',
@@ -544,17 +559,10 @@ angular.module('zmApp.controllers').controller('zmApp.MontageHistoryCtrl', ['$sc
         var str = [];
         for (var p in obj) str.push(encodeURIComponent(p) + "=" + encodeURIComponent(obj[p]));
         var foo = str.join("&");
-        //console.log("****SUB RETURNING " + foo);
+        //console.log("****HISTORY CONTROL RETURNING " + foo);
         return foo;
       },
-      data: {
-        view: "request",
-        request: "stream",
-        connkey: connkey,
-        command: cmd,
-        auth: myauthtoken, // user: loginData.username,
-        // pass: loginData.password
-      }
+      data: data_payload
     });
     req.then(function (succ) {
       NVR.debug("subControl success:" + JSON.stringify(succ));
@@ -614,32 +622,11 @@ angular.module('zmApp.controllers').controller('zmApp.MontageHistoryCtrl', ['$sc
       url:cmdUrl
     });
     
-    /* var req = qHttp({
-      method: 'POST',
-      url: loginData.url + '/index.php?view=console',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      transformRequest: function (obj) {
-        var str = [];
-        for (var p in obj) str.push(encodeURIComponent(p) + "=" + encodeURIComponent(obj[p]));
-        var foo = str.join("&");
-        if (extras) foo = foo + extras;
-        return foo;
-      },
-      data: {
-        view: "request",
-        request: "stream",
-        connkey: connkey,
-        command: cmd,
-        auth: myauthtoken, // user: loginData.username,
-        // pass: loginData.password
-      }
-    });*/
+   
     req.then(function (succ) {
       var resp = succ.data;
 
-      console.log ("zms response: " + JSON.stringify(resp));
+      //console.log ("zms response: " + JSON.stringify(resp));
 
       // move progress bar if event id is the same
       if (resp.result == "Ok" && ndx != -1 && (resp.status && resp.status.event == $scope.MontageMonitors[ndx].Monitor.eid)) {
@@ -655,7 +642,7 @@ angular.module('zmApp.controllers').controller('zmApp.MontageHistoryCtrl', ['$sc
         // $scope.MontageMonitors[ndx].Monitor.sliderProgress.progress = 0;
         NVR.debug("Fetching details, as event changed for " + $scope.MontageMonitors[ndx].Monitor.Name + " from " + $scope.MontageMonitors[ndx].Monitor.eid + " to " + resp.status.event);
         var ld = NVR.getLogin();
-        var apiurl = ld.apiurl + "/events/" + resp.status.event + ".json";
+        var apiurl = ld.apiurl + "/events/" + resp.status.event + ".json?"+$rootScope.authSession;
         //console.log ("API " + apiurl);
         qHttp({
           method: 'get',
@@ -892,7 +879,7 @@ angular.module('zmApp.controllers').controller('zmApp.MontageHistoryCtrl', ['$sc
        
         var videoURL= m.Monitor.baseURL  + "/index.php?view=view_video&eid=" + success.eid;
 
-                  if ($rootScope.authSession != 'undefined') videoURL += $rootScope.authSession;
+                  videoURL += $rootScope.authSession;
                   if ($rootScope.basicAuthToken) videoURL = videoURL + "&basicauth=" + $rootScope.basicAuthToken;
 
                   m.Monitor.videoObject = {
@@ -998,7 +985,7 @@ angular.module('zmApp.controllers').controller('zmApp.MontageHistoryCtrl', ['$sc
     var d = $q.defer();
     // now get event details to show alarm frames
     var loginData = NVR.getLogin();
-    var myurl = loginData.apiurl + '/events/' + eid + ".json";
+    var myurl = loginData.apiurl + '/events/' + eid + ".json?"+$rootScope.authSession;
     //console.log (">> 1: getting: "+myurl);
 
     var r = {
@@ -1021,7 +1008,7 @@ angular.module('zmApp.controllers').controller('zmApp.MontageHistoryCtrl', ['$sc
       else {
         r.eid = target;
         // now get time of that event
-        myurl = loginData.apiurl+'/events/'+target + '.json';
+        myurl = loginData.apiurl+'/events/'+target + '.json?'+$rootScope.authSession;
         $http.get (myurl)
         .then (function (succ) {
             r.stime = succ.data.event.Event.StartTime;
@@ -1541,7 +1528,7 @@ angular.module('zmApp.controllers').controller('zmApp.MontageHistoryCtrl', ['$sc
     //if (monitor.Monitor.isPaused) return "";
     stream = monitor.Monitor.eventUrl; //eventUrl already has all the foo
 
-    stream += NVR.insertBasicAuthToken();
+    stream += NVR.insertSpecialTokens();
     // console.log("STREAM=" + stream);
     return stream;
 

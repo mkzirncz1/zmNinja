@@ -100,6 +100,17 @@ do
                 exe cp -R node_modules/menu $i/app/node_modules
                 exe cp -R node_modules/clivas $i/app/node_modules
                 exe cp -R node_modules/keypress $i/app/node_modules
+                exe cp -R node_modules/define-properties $i/app/node_modules
+                exe cp -R node_modules/es-abstract $i/app/node_modules
+                exe cp -R node_modules/function-bind $i/app/node_modules
+                exe cp -R node_modules/has $i/app/node_modules
+                exe cp -R node_modules/has-symbols $i/app/node_modules
+                exe cp -R node_modules/is-arguments $i/app/node_modules
+                exe cp -R node_modules/is-date-object $i/app/node_modules
+                exe cp -R node_modules/is-regex $i/app/node_modules
+                exe cp -R node_modules/object-is $i/app/node_modules
+                exe cp -R node_modules/object-keys $i/app/node_modules
+                exe cp -R node_modules/regexp.prototype.flags $i/app/node_modules
                 
                 echo Copying over zmNinja code...
                 exe cp package.json $i/app
@@ -107,12 +118,13 @@ do
                 exe cp electron_js/main.js $i/app/electron_js
                 exe cp www/ZMNINJA-LICENSE-DESKTOP-CLIENT.txt $BASENAME
                 echo $APPVER > $BASENAME/version
+                echo "APP VER IS $APPVER"
                 exe cp resources/icon.png $BASENAME
                 exe cd $i 
-                cat app/www/js/NVR.js | sed "s/var zmAppVersion[ ]*=[ ]*\"unknown\"/var zmAppVersion=\"$APPVER\"/" > app/www/js/NVR.js.tmp
+                cat app/www/js/NVR.js | sed "s/var zmAppVersion[ ]*=[ ]*\".*\"/var zmAppVersion=\"$APPVER\"/" > app/www/js/NVR.js.tmp
                 exe rm -fr app/www/js/NVR.js
                 exe mv app/www/js/NVR.js.tmp app/www/js/NVR.js
-                
+                exe cp app/www/js/NVR.js /tmp
                 
                 rm -fr app.asar
 
